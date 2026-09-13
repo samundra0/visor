@@ -1,0 +1,4 @@
+name: visor
+version: 1.0.0
+description: "Visor — push live visual blocks (todos, findings, tables, stats) to an infinite-canvas holographic webpage that updates in place via SSE."
+author: "samundra (Datahub Nepal)"

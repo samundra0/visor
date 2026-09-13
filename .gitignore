@@ -1,0 +1,15 @@
+# runtime state (store + media + logs)
+data/
+*.log
+visor.log
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# docker build context noise
+.dockerignore
+
+# os
+.DS_Store

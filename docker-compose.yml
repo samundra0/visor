@@ -1,0 +1,16 @@
+services:
+  visor:
+    build: .
+    container_name: visor
+    # Run as the host user so the host CLI and the container share ownership of
+    # the ./data volume (avoids PermissionError writing store.json).
+    # Override to match your uid:gid, e.g. VISOR_USER=$(id -u):$(id -g)
+    user: "${VISOR_USER:-1000:1000}"
+    ports:
+      - "8900:8900"
+    volumes:
+      - ./data:/data
+    environment:
+      - VISOR_DATA=/data
+      - HOLO_PORT=8900
+    restart: unless-stopped
