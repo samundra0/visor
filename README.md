@@ -78,8 +78,31 @@ python3 visor.py list
 
 ## Pointing your agent at it
 
-**The agent only needs the API.** Full copy-paste prompt for any agent:
-[docs/agent-setup.md](docs/agent-setup.md).
+**MCP (Claude Code, OpenCode, Codex, Antigravity — anything MCP-capable):**
+zero-dependency MCP server included (`mcp/server.py`, Python stdlib only).
+It exposes `visor_push` + `visor_boards` as first-class tools and
+auto-starts the container if it's down:
+
+```sh
+# Claude Code
+claude mcp add visor -- python3 /path/to/visor/mcp/server.py
+
+# OpenCode  (opencode.json)
+#   "mcp": { "visor": { "type": "local",
+#     "command": ["python3", "/path/to/visor/mcp/server.py"], "enabled": true } }
+
+# Codex CLI  (~/.codex/config.toml)
+#   [mcp_servers.visor]
+#   command = "python3"
+#   args = ["/path/to/visor/mcp/server.py"]
+```
+
+Env for the MCP server: `VISOR_URL` (default `http://127.0.0.1:8900`),
+`VISOR_HOME` (repo root, for staging local media; defaults to the repo).
+
+**The agent only needs the API** (no MCP, no plugin): full copy-paste prompt
+for any agent: [docs/agent-setup.md](docs/agent-setup.md). Note: pushing to a
+board name that doesn't exist yet **auto-creates the board** — no setup step.
 
 For **Hermes Agent** specifically there is a first-class plugin —
 [hermes/](hermes/) — that registers a `visor_push` tool so the agent pushes

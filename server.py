@@ -83,6 +83,20 @@ def get_board(st, bid):
     return st["boards"].get(bid)
 
 
+def ensure_board(st, bid, title_hint=""):
+    """Return the board, creating it if missing. First-push-to-a-new-board-name
+    auto-creates the board so agents (MCP/CLI/HTTP) don't need a create step."""
+    b = get_board(st, bid)
+    if b:
+        return b
+    title = str(title_hint or bid).strip() or "board"
+    if len(title) > 60:
+        title = title[:60]
+    st["boards"][bid] = _new_board(title)
+    st["order"].append(bid)
+    return st["boards"][bid]
+
+
 def board_title(st, bid):
     b = get_board(st, bid)
     return b["title"] if b else bid
@@ -196,10 +210,7 @@ class Handler(BaseHTTPRequestHandler):
             focus = bool(body.get("focus"))
             with LOCK:
                 st = load()
-                b = get_board(st, bid)
-                if not b:
-                    self._send(404, {"error": f"no board {bid!r}"})
-                    return
+                b = ensure_board(st, bid, body.get("title", ""))
                 b["seq"] = b.get("seq", 0) + 1
                 blk = {
                     "id": uuid.uuid4().hex[:10],
@@ -215,36 +226,34 @@ class Handler(BaseHTTPRequestHandler):
                 }
                 b["blocks"].append(blk)
                 save(st)
+                broadcast({"op": "boards"})
                 broadcast({"op": "upsert", "id": blk["id"], "board": bid,
                            "focus": focus})
+            blk["board"] = bid
             self._send(200, blk)
         elif u.path == "/api/clear":
             bid = self._board_param(body)
             with LOCK:
                 st = load()
-                b = get_board(st, bid)
-                if not b:
-                    self._send(404, {"error": f"no board {bid!r}"})
-                    return
+                b = ensure_board(st, bid)
                 t = body.get("type")
                 if t:
                     b["blocks"] = [x for x in b["blocks"] if x["type"] != t]
                 else:
                     b["blocks"] = []
                 save(st)
+                broadcast({"op": "boards"})
                 broadcast({"op": "clear", "board": bid})
             self._send(200, {"ok": True})
         elif u.path == "/api/meta":
             bid = self._board_param(body)
             with LOCK:
                 st = load()
-                b = get_board(st, bid)
-                if not b:
-                    self._send(404, {"error": f"no board {bid!r}"})
-                    return
+                b = ensure_board(st, bid, body.get("title", ""))
                 if "title" in body:
                     b["title"] = body["title"]
                 save(st)
+                broadcast({"op": "boards"})
                 broadcast({"op": "meta", "board": bid,
                            "title": b["title"]})
             self._send(200, {"ok": True})

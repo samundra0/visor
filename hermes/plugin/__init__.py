@@ -230,6 +230,9 @@ def _handle_visor_push(args: Dict[str, Any], **_kw: Any) -> str:
                                       "valid": _BLOCK_TYPES})
                 continue
             data = dict(b.get("data") or {})
+            # LLMs sometimes nest the content under the type key — unwrap it
+            if btype in data and isinstance(data[btype], dict):
+                data = dict(data[btype])
             if btype == "image" and data.get("src"):
                 data["src"] = _stage_image(data["src"])
             if btype == "video" and data.get("src"):
