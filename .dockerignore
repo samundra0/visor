@@ -1,0 +1,9 @@
+data
+*.log
+__pycache__
+.git
+docs
+hermes
+*.md
+LICENSE
+docker-compose.yml

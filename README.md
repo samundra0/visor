@@ -49,7 +49,7 @@ hover — while you do something else.
 Requires: Docker (or just Python 3.9+ for a bare run).
 
 ```sh
-git clone https://github.com/samundra/visor.git
+git clone https://github.com/samundra0/visor.git
 cd visor
 docker compose up -d          # builds + starts, http://localhost:8900
 ```
