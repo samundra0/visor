@@ -28,6 +28,8 @@ Blocks (cont.):
   visor.py list
   visor.py rm <id>
   visor.py clear [type]
+
+  Add --wide to any block command to push a 2-column-wide card.
 """
 import json
 import os
@@ -76,11 +78,21 @@ def main():
         i = a.index("--board")
         board = a[i + 1]
         del a[i:i + 2]
+    wide = "--wide" in a   # push the block as a 2-column-wide card
+    if wide:
+        a.remove("--wide")
     bq = f"?board={urllib.parse.quote(board)}"
 
     if not a:
         sys.exit(__doc__)
     cmd, rest = a[0], a[1:]
+
+    def bpost(path, payload):
+        # block push; adds the wide flag when set
+        if wide:
+            payload = dict(payload)
+            payload["w"] = 2
+        return post(path, payload)
 
     if cmd == "boards":
         with urllib.request.urlopen(BASE + "/api/boards", timeout=10) as resp:
@@ -112,10 +124,10 @@ def main():
     if cmd == "title":
         post(f"/api/meta{bq}", {"title": rest[0] if rest else "Visor"})
     elif cmd == "section":
-        post(f"/api/blocks{bq}", {"type": "section", "data": {"text": rest[0],
+        bpost(f"/api/blocks{bq}", {"type": "section", "data": {"text": rest[0],
                                                           "subtitle": rest[1] if len(rest) > 1 else ""}})
     elif cmd == "text":
-        post(f"/api/blocks{bq}", {"type": "text", "title": rest[0] if rest else "",
+        bpost(f"/api/blocks{bq}", {"type": "text", "title": rest[0] if rest else "",
                              "data": {"text": rest[1] if len(rest) > 1 else ""}})
     elif cmd == "todo":
         items = []
@@ -127,13 +139,13 @@ def main():
             if it.startswith("[x]") or it.startswith("[ ]"):
                 it = it[3:].strip()
             items.append({"text": it, "done": done})
-        post(f"/api/blocks{bq}", {"type": "todo", "title": rest[0],
+        bpost(f"/api/blocks{bq}", {"type": "todo", "title": rest[0],
                              "data": {"items": items}})
     elif cmd == "table":
         parts = rest[1].split(";")
         headers = [c.strip() for c in parts[0].split("|")]
         rows = [[c.strip() for c in p.split("|")] for p in parts[1:] if p.strip()]
-        post(f"/api/blocks{bq}", {"type": "table", "title": rest[0],
+        bpost(f"/api/blocks{bq}", {"type": "table", "title": rest[0],
                              "data": {"headers": headers, "rows": rows}})
     elif cmd == "stat":
         items = []
@@ -144,7 +156,7 @@ def main():
             items.append({"value": bits[0], "label": bits[1],
                           "tone": bits[2] if len(bits) > 2 else "cy",
                           "sub": bits[3] if len(bits) > 3 else ""})
-        post(f"/api/blocks{bq}", {"type": "stat", "title": rest[0],
+        bpost(f"/api/blocks{bq}", {"type": "stat", "title": rest[0],
                              "data": {"items": items}})
     elif cmd == "chart":
         kind, labels, values = "bar", [], []
@@ -159,7 +171,7 @@ def main():
         k = grab("--kind"); kind = k or "bar"
         lb = grab("--labels"); labels = [x.strip() for x in lb.split(";")] if lb else []
         vv = grab("--values"); values = [float(x) if '.' in x else int(x) for x in vv.split(";")] if vv else []
-        post(f"/api/blocks{bq}", {"type": "chart", "title": rest[0],
+        bpost(f"/api/blocks{bq}", {"type": "chart", "title": rest[0],
                              "data": {"kind": kind, "labels": labels, "values": values}})
     elif cmd == "code":
         lang = ""
@@ -167,14 +179,14 @@ def main():
             i = rest.index("--lang")
             lang = rest[i + 1]
             rest = rest[:i] + rest[i + 2:]
-        post(f"/api/blocks{bq}", {"type": "code", "title": rest[0],
+        bpost(f"/api/blocks{bq}", {"type": "code", "title": rest[0],
                              "data": {"lang": lang, "code": rest[1] if len(rest) > 1 else ""}})
     elif cmd == "image":
-        post(f"/api/blocks{bq}", {"type": "image", "title": rest[0],
+        bpost(f"/api/blocks{bq}", {"type": "image", "title": rest[0],
                              "data": {"src": stage(rest[1]),
                                       "caption": rest[2] if len(rest) > 2 else ""}})
     elif cmd == "video":
-        post(f"/api/blocks{bq}", {"type": "video", "title": rest[0],
+        bpost(f"/api/blocks{bq}", {"type": "video", "title": rest[0],
                              "data": {"src": stage(rest[1]),
                                       "caption": rest[2] if len(rest) > 2 else ""}})
     elif cmd == "audio":
@@ -185,10 +197,10 @@ def main():
                 continue
             label, src = (x.strip() for x in it.split(":", 1))
             items.append({"label": label, "src": stage(src)})
-        post(f"/api/blocks{bq}", {"type": "audio", "title": rest[0],
+        bpost(f"/api/blocks{bq}", {"type": "audio", "title": rest[0],
                              "data": {"items": items}})
     elif cmd == "html":
-        post(f"/api/blocks{bq}", {"type": "html", "title": rest[0],
+        bpost(f"/api/blocks{bq}", {"type": "html", "title": rest[0],
                              "data": {"html": rest[1] if len(rest) > 1 else ""}})
     elif cmd == "list":
         with urllib.request.urlopen(BASE + f"/api/state{bq}", timeout=10) as r:

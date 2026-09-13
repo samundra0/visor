@@ -98,6 +98,15 @@ pre.code .lang{display:block;font-size:9.5px;font-weight:700;letter-spacing:.12e
 .mediatools button:hover{background:#e0e7ff}
 .videoblk video{width:100%;max-width:420px;border-radius:10px;display:block;background:#000}
 .videoblk .cap{font-size:11.5px;color:var(--dim);margin-top:8px}
+/* selection */
+.blk.selected{border-color:var(--acc);box-shadow:0 0 0 2px rgba(79,70,229,.25),var(--shadow-hover);z-index:50}
+.blk .bar .wbtn{cursor:pointer;color:var(--faint);font-size:12px;line-height:1;padding:3px 5px;border-radius:6px}
+.blk .bar .wbtn:hover{color:var(--acc);background:var(--acc2)}
+/* minimap */
+#minimap{position:fixed;left:16px;bottom:18px;z-index:20;background:rgba(255,255,255,.92);
+  backdrop-filter:blur(8px);border:1px solid var(--line2);border-radius:10px;padding:5px;
+  box-shadow:var(--shadow);cursor:crosshair}
+#minimap canvas{display:block;width:180px;height:120px}
 /* charts */
 .chart svg{display:block;width:100%}
 .chart .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px}
@@ -133,7 +142,7 @@ pre.code .lang{display:block;font-size:9.5px;font-weight:700;letter-spacing:.12e
 #ctl button:hover{border-color:var(--acc);color:var(--acc)}
 #ctl button.on{background:var(--acc);border-color:var(--acc);color:#fff}
 #ctl button.on:hover{color:#fff}
-#hint{position:fixed;bottom:18px;left:16px;z-index:20;font-size:11px;color:var(--dim);
+#hint{position:fixed;bottom:18px;left:212px;z-index:20;font-size:11px;color:var(--dim);
   background:rgba(255,255,255,.85);padding:6px 11px;border-radius:8px;border:1px solid var(--line);
   max-width:calc(100vw - 320px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #status{position:fixed;top:16px;right:16px;z-index:20;font-size:10.5px;font-weight:700;letter-spacing:.1em;
@@ -156,7 +165,8 @@ pre.code .lang{display:block;font-size:9.5px;font-weight:700;letter-spacing:.12e
   <div id="tabs"></div>
 </div>
 <div id="status"><span class="dot"></span><span id="statTxt">connecting</span></div>
-<div id="hint">drag: pan · scroll: zoom · drag block: move · dbl-click: focus · G: snap · ⇧G: align all · tabs: boards</div>
+<div id="minimap"><canvas id="mm" width="360" height="240"></canvas></div>
+<div id="hint">scroll: zoom · drag: pan · drag card: move · click card: select (arrows nudge · Esc deselect) · G: snap · ⇧G: align · M: map · E: export</div>
 <div id="ctl">
   <button id="gsnap" title="toggle snap to grid while dragging (G)">⌗ snap</button>
   <button id="galign" title="re-flow all blocks onto the grid so nothing overlaps (Shift+G)">⌗ align all</button>
@@ -393,10 +403,17 @@ function makeEl(b){
   el.style.width = widthFor(b) + 'px';
   el.dataset.id = b.id;
   el.innerHTML =
-    (b.type==='section' ? '' : `<div class="bar"><span class="tag">${esc(b.type)}</span><span class="ttl">${esc(b.title||'')}</span><span class="x" title="remove">✕</span></div>`) +
+    (b.type==='section' ? '' : `<div class="bar"><span class="tag">${esc(b.type)}</span><span class="ttl">${esc(b.title||'')}</span><span class="wbtn" title="toggle wide card">${(b.w||1)>=2 ? '⟨⟩' : '⟩⟨'}</span><span class="x" title="remove">✕</span></div>`) +
     `<div class="bd">${bodyHTML(b)}</div>`;
   el.querySelector('.bar')?.addEventListener('pointerdown', e => startDrag(e, el, b.id));
   el.querySelector('.x')?.addEventListener('click', e => { e.stopPropagation(); apiDel(b.id); });
+  const wb = el.querySelector('.wbtn');
+  if (wb) wb.addEventListener('click', e => {
+    e.stopPropagation();
+    const w = (b.w||1) >= 2 ? 1 : 2;
+    patchBlock(b.id, {w});
+  });
+  el.addEventListener('pointerdown', () => { selectBlock(b.id); });
   el.querySelectorAll('.todo li').forEach(li => li.addEventListener('click', () => {
     const i = +li.dataset.i; const it = blocks.get(b.id)?.meta.data?.items?.[i];
     if (!it) return;
@@ -506,6 +523,30 @@ function focusEl(el){
   applyView();
 }
 
+/* ---------- selection + nudge ---------- */
+let selectedId = null;
+function selectBlock(id){
+  if (id === selectedId) return;
+  if (selectedId){ const o = blocks.get(selectedId); o?.el?.classList.remove('selected'); }
+  selectedId = id || null;
+  if (selectedId){ const r = blocks.get(selectedId); r?.el?.classList.add('selected'); }
+  drawMinimap();
+}
+function nudgeSelected(dx, dy){
+  if (!selectedId) return;
+  const rec = blocks.get(selectedId); if (!rec) return;
+  const b = rec.meta;
+  const p = layout.get(b.id) || {x:0, y:0};
+  let nx = p.x + dx, ny = p.y + dy;
+  if (gridSnap){ const sp = snapPos(nx, ny); nx = sp.x; ny = sp.y; }
+  else { nx = Math.round(nx); ny = Math.round(ny); }
+  layout.set(b.id, {x:nx, y:ny});
+  rec.el.style.transform = `translate(${nx}px,${ny}px)`;
+  rec.meta.x = nx; rec.meta.y = ny;
+  patchBlock(b.id, {x:nx, y:ny});
+  drawMinimap();
+}
+
 let panning = null;
 addEventListener('pointerdown', e => {
   if (e.target.closest('.blk') || e.target.closest('#ctl') || e.target.closest('#hud')) return;
@@ -524,7 +565,12 @@ addEventListener('wheel', e => {
 }, {passive:false});
 addEventListener('dblclick', e => {
   if (e.target.closest('.blk')) return;
+  if (e.target.closest('#minimap')) return;
   zoomAt(e.clientX, e.clientY, 1.5);
+});
+addEventListener('click', e => {
+  if (e.target.closest('.blk') || e.target.closest('#hud') || e.target.closest('#ctl') || e.target.closest('#minimap')) return;
+  selectBlock(null);
 });
 document.getElementById('zin').onclick = () => zoomAt(innerWidth/2, innerHeight/2, 1.25);
 document.getElementById('zout').onclick = () => zoomAt(innerWidth/2, innerHeight/2, 1/1.25);
@@ -538,9 +584,17 @@ document.getElementById('gsnap').onclick = () => {
 };
 document.getElementById('galign').onclick = alignAll;
 addEventListener('keydown', e => {
-  if (e.target.closest('input,textarea,select')) return;
+  const tgt = e.target;
+  if (tgt && tgt.closest && tgt.closest('input,textarea,select')) return;
   if (e.key === 'g' && !e.shiftKey){ e.preventDefault(); document.getElementById('gsnap').click(); }
   if (e.key === 'G' && e.shiftKey){ e.preventDefault(); document.getElementById('galign').click(); }
+  if (e.key === 'm' || e.key === 'M'){ e.preventDefault(); toggleMinimap(); }
+  if (e.key === 'e' || e.key === 'E'){ e.preventDefault(); exportBoard(); }
+  if (e.key === 'Escape'){ selectBlock(null); return; }
+  if (e.key === 'ArrowLeft'  && selectedId){ e.preventDefault(); nudgeSelected(e.shiftKey?-GRID:-1, 0); }
+  if (e.key === 'ArrowRight' && selectedId){ e.preventDefault(); nudgeSelected(e.shiftKey? GRID: 1, 0); }
+  if (e.key === 'ArrowUp'    && selectedId){ e.preventDefault(); nudgeSelected(0, e.shiftKey?-GRID:-1); }
+  if (e.key === 'ArrowDown'  && selectedId){ e.preventDefault(); nudgeSelected(0, e.shiftKey? GRID: 1); }
 });
 async function alignAll(){
   const list = [...blocks.values()].sort((a,b) => (a.meta.seq??0)-(b.meta.seq??0));
@@ -570,6 +624,92 @@ async function alignAll(){
       body: JSON.stringify({x, y})});
   }
 }
+
+/* ================= minimap ================= */
+const mmCanvas = document.getElementById('mm');
+const mmCtx = mmCanvas.getContext('2d');
+let mmVisible = true;
+const MM_W = mmCanvas.width, MM_H = mmCanvas.height;
+function toggleMinimap(){
+  mmVisible = !mmVisible;
+  document.getElementById('minimap').style.display = mmVisible ? '' : 'none';
+  document.getElementById('hint').style.left = mmVisible ? '212px' : '16px';
+}
+function blockBounds(){
+  if (!blocks.size) return null;
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  for (const r of blocks.values()){
+    const p = layout.get(r.meta.id); if(!p) continue;
+    const w = r.el?.offsetWidth || widthFor(r.meta), h = r.el?.offsetHeight || 100;
+    x0=Math.min(x0,p.x); y0=Math.min(y0,p.y); x1=Math.max(x1,p.x+w); y1=Math.max(y1,p.y+h);
+  }
+  const pad = 120;
+  return {x0:x0-pad, y0:y0-pad, x1:x1+pad, y1:y1+pad};
+}
+function drawMinimap(){
+  if (!mmVisible) return;
+  mmCtx.clearRect(0,0,MM_W,MM_H);
+  const bb = blockBounds();
+  // viewport rect in world coords
+  const vwW = innerWidth/view.s, vwH = innerHeight/view.s;
+  const vwX = -view.x/view.s, vwY = -view.y/view.s;
+  if (!bb){
+    // no blocks: center a small view box
+    const s = Math.min(MM_W/200, MM_H/200);
+    const bw = vwW*s, bh = vwH*s;
+    mmCtx.fillStyle = 'rgba(79,70,229,.12)';
+    mmCtx.strokeStyle = '#4f46e5';
+    mmCtx.fillRect((MM_W-bw)/2,(MM_H-bh)/2,bw,bh);
+    mmCtx.strokeRect((MM_W-bw)/2,(MM_H-bh)/2,bw,bh);
+    return;
+  }
+  const s = Math.min(MM_W/ (bb.x1-bb.x0), MM_H/(bb.y1-bb.y0));
+  const tx = x => (x - bb.x0)*s + (MM_W - (bb.x1-bb.x0)*s)/2;
+  const ty = y => (y - bb.y0)*s + (MM_H - (bb.y1-bb.y0)*s)/2;
+  // blocks
+  for (const r of blocks.values()){
+    const p = layout.get(r.meta.id); if(!p) continue;
+    const w = (r.el?.offsetWidth || widthFor(r.meta))*s, h = (r.el?.offsetHeight || 100)*s;
+    const isSel = r.meta.id === selectedId;
+    mmCtx.fillStyle = isSel ? 'rgba(79,70,229,.85)' : 'rgba(113,113,122,.55)';
+    mmCtx.fillRect(tx(p.x), ty(p.y), Math.max(2,w), Math.max(2,h));
+  }
+  // viewport
+  const vx = tx(vwX), vy = ty(vwY), vw2 = vwW*s, vh2 = vwH*s;
+  mmCtx.fillStyle = 'rgba(79,70,229,.10)';
+  mmCtx.strokeStyle = '#4f46e5';
+  mmCtx.lineWidth = 1.5;
+  mmCtx.fillRect(vx,vy,vw2,vh2);
+  mmCtx.strokeRect(vx,vy,vw2,vh2);
+}
+// click/drag on minimap to recenter
+let mmDrag = false;
+mmCanvas.addEventListener('pointerdown', e => {
+  e.stopPropagation();
+  mmDrag = true;
+  mmCanvas.setPointerCapture(e.pointerId);
+  moveViewToMinimap(e);
+});
+mmCanvas.addEventListener('pointermove', e => { if (mmDrag) moveViewToMinimap(e); });
+mmCanvas.addEventListener('pointerup', () => mmDrag = false);
+function moveViewToMinimap(e){
+  const bb = blockBounds(); if (!bb) return;
+  const s = Math.min(MM_W/(bb.x1-bb.x0), MM_H/(bb.y1-bb.y0));
+  const rect = mmCanvas.getBoundingClientRect();
+  const px = (e.clientX - rect.left) * (mmCanvas.width / rect.width);
+  const py = (e.clientY - rect.top) * (mmCanvas.height / rect.height);
+  const wx = (px - (MM_W - (bb.x1-bb.x0)*s)/2)/s + bb.x0;
+  const wy = (py - (MM_H - (bb.y1-bb.y0)*s)/2)/s + bb.y0;
+  view.x = innerWidth/2 - wx*view.s;
+  view.y = innerHeight/2 - wy*view.s;
+  applyView();
+}
+// keep minimap fresh while the view moves
+const _applyView = applyView;
+applyView = function(){
+  _applyView();
+  if (mmVisible) requestAnimationFrame(drawMinimap);
+};
 
 function startDrag(e, el, id){
   if (e.button !== 0) return;
@@ -608,10 +748,11 @@ function renderTabs(){
     const t = document.createElement('button');
     t.className = 'tab' + (bd.id === currentBoard ? ' on' : '');
     t.innerHTML = `<span class="nm">${esc(bd.title)}</span><span class="ct">${bd.blocks}</span>` +
-      (bd.id === currentBoard ? `<span class="ops"><button data-op="rename" title="rename">✎</button><button data-op="del" title="delete (needs 2+ boards)">✕</button></span>` : '');
+      (bd.id === currentBoard ? `<span class="ops"><button data-op="rename" title="rename">✎</button><button data-op="export" title="export board as HTML">↧</button><button data-op="del" title="delete (needs 2+ boards)">✕</button></span>` : '');
     t.addEventListener('click', e => {
       const op = e.target.dataset && e.target.dataset.op;
       if (op === 'rename'){ e.stopPropagation(); askRename(bd); return; }
+      if (op === 'export'){ e.stopPropagation(); exportBoard(); return; }
       if (op === 'del'){ e.stopPropagation(); askDeleteBoard(bd); return; }
       switchBoard(bd.id);
     });
@@ -638,6 +779,50 @@ function askDeleteBoard(bd){
   if (!confirm(`Delete board “${bd.title}” and its ${bd.blocks} block(s)?`)) return;
   fetch(`/api/boards/${encodeURIComponent(bd.id)}`, {method:'DELETE'});
 }
+function exportBoard(){
+  // snapshot the current board into a single standalone HTML file
+  const list = [...blocks.values()];
+  if (!list.length){ alert('Nothing to export on this board.'); return; }
+  const css = document.querySelector('style').textContent;
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  const cards = list.map(rec => {
+    const b = rec.meta;
+    const p = layout.get(b.id) || {x:0,y:0};
+    const w = rec.el?.offsetWidth || widthFor(b), h = rec.el?.offsetHeight || 100;
+    x0=Math.min(x0,p.x); y0=Math.min(y0,p.y); x1=Math.max(x1,p.x+w); y1=Math.max(y1,p.y+h);
+    // clone the live-rendered body, rewrite media srcs to absolute so the file still plays
+    let inner = rec.el.querySelector('.bd')?.innerHTML || rec.el.innerHTML;
+    inner = inner.replace(/(src=")\/media\//g, (m) => m + ''); // keep for now
+    inner = inner.replace(/(src=")(?!https?:\/\/|data:)([^"]*)/g, (m,a,src) => a + (src.startsWith('/') ? location.origin + src : src));
+    const bar = b.type==='section' ? '' :
+      `<div class="bar" style="cursor:default"><span class="tag">${esc(b.type)}</span><span class="ttl">${esc(b.title||'')}</span></div>`;
+    return `<div class="blk" style="position:absolute;left:${p.x}px;top:${p.y}px;width:${w}px;margin:0;animation:none">
+      ${bar}<div class="bd">${inner}</div></div>`;
+  });
+  const pad = 40;
+  const cw = Math.ceil(x1-x0+pad*2), ch = Math.ceil(y1-y0+pad*2);
+  const title = _boardTitle || 'Visor';
+  const ts = new Date().toLocaleString();
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(title)} — export</title>
+<style>${css}
+html,body{overflow:auto;background:var(--bg)}
+#snap{position:relative;width:${cw}px;height:${ch}px;margin:24px auto;overflow:visible}
+#snap .blk .bar{cursor:default}
+#snaphead{max-width:${cw}px;margin:0 auto;padding:8px 4px 0;color:var(--dim);font-size:12px}
+#snaphead b{color:var(--txt);font-size:16px}
+</style></head><body>
+<div id="snaphead"><b>${esc(title)}</b> · exported from Visor · ${esc(ts)}</div>
+<div id="snap">${cards.join('')}</div>
+</body></html>`;
+  const blob = new Blob([html], {type:'text/html'});
+  const a = document.createElement('a');
+  const slug = (currentBoard||'board').replace(/[^a-z0-9]+/gi,'-').toLowerCase();
+  a.href = URL.createObjectURL(blob);
+  a.download = `visor-${slug}-${Date.now()}.html`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
 function refreshBoards(){
   return fetch('/api/boards').then(r=>r.json()).then(st => {
     boards = st.boards || [];
@@ -656,6 +841,7 @@ function switchBoard(bid){
 
 /* ================= server comms ================= */
 let es = null;
+let bootTimer = 0;
 function refreshEmpty(){
   document.getElementById('empty').style.display = blocks.size ? 'none' : 'flex';
 }
@@ -679,9 +865,11 @@ function connect(){
   if (es) { try { es.close(); } catch(e){} es = null; }
   const st = document.getElementById('status');
   es = new EventSource('/api/events');
+  let sawDisconnect = false;
   es.onopen = () => {
     connected = true;
     st.classList.add('on'); document.getElementById('statTxt').textContent = 'live';
+    if (sawDisconnect){ sawDisconnect = false; resyncBoard(); }   // we may have missed events while down
   };
   es.onmessage = ev => {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
@@ -729,7 +917,10 @@ function connect(){
       apiDel(msg.id);
     } else if (msg.op === 'clear'){
       if (bid !== currentBoard){ refreshBoards(); return; }
-      boot(true);
+      // Debounce: an agent's "clear + push burst" arrives as clear-then-upserts.
+      // If we rebuild immediately, the refetch runs before the pushes are saved
+      // and the clear wipes them. Waiting lets the burst land in the same refetch.
+      clearTimeout(bootTimer); bootTimer = setTimeout(() => boot(true), 150);
     } else if (msg.op === 'meta'){
       if (msg.board && msg.board !== currentBoard){ refreshBoards(); return; }
       if (msg.title) setBoardTitle(msg.title);
@@ -740,10 +931,23 @@ function connect(){
     }
   };
   es.onerror = () => {
-    if (es.readyState === EventSource.CLOSED){
+    // EventSource auto-reconnects on a transient drop: readyState goes OPEN->CONNECTING
+    // (it only reaches CLOSED if we close() it). So treat anything-not-OPEN as "we were
+    // down" — that's what arms the onopen resync that catches events we missed.
+    if (es.readyState !== EventSource.OPEN){
+      sawDisconnect = true;
+      connected = false;
       st.classList.remove('on'); document.getElementById('statTxt').textContent = 'reconnecting';
     }
   };
+}
+let _resyncing = false;
+function resyncBoard(){
+  // full re-fetch + rebuild of the current board (keeps camera) — used after reconnects
+  if (_resyncing) return;
+  _resyncing = true;
+  selectBlock(null);
+  boot(true).finally(() => { _resyncing = false; drawMinimap(); });
 }
 let _boardTitle = '';
 function currentBoardTitle(){ return _boardTitle; }

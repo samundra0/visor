@@ -61,6 +61,12 @@ VISOR_PUSH_SCHEMA: Dict[str, Any] = {
                         "properties": {
                             "type": {"type": "string", "enum": _BLOCK_TYPES},
                             "title": {"type": "string", "description": "Block title (shown in header bar)."},
+                            "w": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 3,
+                                "description": "Width in card columns (1 = normal, 2 = wide). Use for content that needs the extra room (big tables, wide code).",
+                            },
                             "data": {
                                 "type": "object",
                                 "description": (
@@ -239,10 +245,12 @@ def _handle_visor_push(args: Dict[str, Any], **_kw: Any) -> str:
             if btype == "section":
                 data.setdefault("text", b.get("title", ""))
             is_last = i == len(blocks) - 1
-            res = _http("POST", f"/api/blocks{q}", {
-                "type": btype, "title": b.get("title", ""), "data": data,
-                **({"focus": True} if (focus and is_last) else {}),
-            })
+            payload = {"type": btype, "title": b.get("title", ""), "data": data}
+            if b.get("w"):
+                payload["w"] = int(b["w"])
+            if focus and is_last:
+                payload["focus"] = True
+            res = _http("POST", f"/api/blocks{q}", payload)
             out["blocks"].append({"id": res.get("id"), "type": btype})
         out["board"] = board
         out["note"] = (

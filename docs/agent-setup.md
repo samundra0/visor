@@ -62,7 +62,9 @@ Set the board title once: `POST /api/meta?board=<id> {"title":"Topic"}`.
 - `html` — `{"html": "<div>…</div>"}`. Escape hatch only; prefer typed blocks.
 
 Every block also accepts `"x": n, "y": n` (world coords) and `"w": 1|2|3`
-(column width). Omit → the client auto-lays out on a grid.
+(column width). Omit → the client auto-lays out on a grid. Use `"w": 2` for
+content that needs the room — wide tables, long code, anything that would
+crowd a single column.
 
 ### Update in place
 
