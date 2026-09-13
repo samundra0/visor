@@ -95,10 +95,14 @@ def main():
             r = post("/api/boards", {"title": r2[0] if r2 else "board"})
             print(f"created board {r['id']!r}")
         elif sub == "rename":
-            post(f"/api/boards/{r2[0]}", {"title": r2[1]})
+            req = urllib.request.Request(BASE + f"/api/boards/{urllib.parse.quote(r2[0])}",
+                                         data=json.dumps({"title": r2[1]}).encode(),
+                                         headers={"Content-Type": "application/json"},
+                                         method="PATCH")
+            urllib.request.urlopen(req, timeout=10)
             print(f"renamed {r2[0]} -> {r2[1]}")
         elif sub == "delete":
-            req = urllib.request.Request(BASE + f"/api/boards/{r2[0]}", method="DELETE")
+            req = urllib.request.Request(BASE + f"/api/boards/{urllib.parse.quote(r2[0])}", method="DELETE")
             urllib.request.urlopen(req, timeout=10)
             print(f"deleted {r2[0]}")
         else:
