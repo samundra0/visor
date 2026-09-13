@@ -855,6 +855,9 @@ async function apiDel(id){
 async function patchBlock(id, payload){
   const rec = blocks.get(id); if(!rec) return;
   Object.assign(rec.meta.data||{}, payload.data||{});
+  // top-level scalar fields (e.g. w for wide cards) must update the local record
+  // too, otherwise the rebuild below renders from stale meta
+  for (const k of ['w']) if (k in payload) rec.meta[k] = payload[k];
   rec.el.remove();
   const el = makeEl(rec.meta); world.appendChild(el); rec.el = el;
   await fetch(`/api/blocks/${id}?board=${encodeURIComponent(currentBoard)}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload)});
@@ -892,7 +895,7 @@ function connect(){
         }
         if (b.v <= (rec.meta.v||0)) return;
         const o = rec.meta;
-        const sameContent = o.type===b.type && o.title===b.title && JSON.stringify(o.data||{})===JSON.stringify(b.data||{});
+        const sameContent = o.type===b.type && o.title===b.title && (o.w||1)===(b.w||1) && JSON.stringify(o.data||{})===JSON.stringify(b.data||{});
         const samePos = (o.x === b.x && o.y === b.y);
         if (!sameContent){
           rec.meta = b;
