@@ -8,8 +8,5 @@ __pycache__/
 *.pyc
 .venv/
 
-# docker build context noise
-.dockerignore
-
 # os
 .DS_Store
