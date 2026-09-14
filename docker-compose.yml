@@ -13,4 +13,9 @@ services:
     environment:
       - VISOR_DATA=/data
       - VISOR_PORT=8900
+    # Keep the container alive while the server crash-loops at startup (e.g.
+    # the data volume is root-owned and unreadable by the container user) so
+    # `docker logs` shows the real traceback instead of an unexplained
+    # connection reset.
+    init: true
     restart: unless-stopped

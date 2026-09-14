@@ -16,6 +16,9 @@ jobs:
 
       - name: Start
         run: |
+          # match the container user to this machine's user so the ./data
+          # bind-mount (created by git checkout) is writable by the server
+          export VISOR_USER="$(id -u):$(id -g)"
           docker compose up -d
           for i in $(seq 1 30); do
             curl -sf http://localhost:8900/api/boards >/dev/null && break

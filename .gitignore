@@ -1,5 +1,9 @@
 # runtime state (store + media + logs)
-data/
+# (keep data/ itself in the repo via .gitkeep so a fresh clone creates the
+#  bind-mount dir owned by the cloner — Docker would create it as root,
+#  which the container user can't write)
+data/*
+!data/.gitkeep
 *.log
 visor.log
 
