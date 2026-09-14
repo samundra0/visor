@@ -3,6 +3,29 @@
 All notable changes to Visor. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.2] — 2026-09-14
+
+- **Docs synced to the shipped state.** CHANGELOG was missing the 1.4.1
+  entry (the CI fix shipped in a separate commit but was never logged);
+  README dev section now lists `scripts/smoke.py`, the CI workflow, and
+  `data/.gitkeep` with a pointer to the 1.4.1 post-mortem, plus a note that
+  a running container must be removed to pick up a rebuilt image; MCP
+  `SERVER_INFO` bumped 1.4.0 → 1.4.1.
+
+## [1.4.1] — 2026-09-14
+
+- **Fixed (fresh-clone / CI): first-start crash on root-owned `data/`.**
+  In a fresh checkout the `./data` directory doesn't exist, so Docker created
+  the bind-mount as **root**; the container runs as `1000:1000` (the
+  `VISOR_USER` default) and `server.py` crash-looped with
+  `PermissionError: [Errno 13]` — the port accepted connections but reset
+  them (curl exit 56). Caught because v1.4's push was the first real CI run,
+  and reproduced locally before fixing. The fix: track `data/.gitkeep` so
+  `git checkout` creates the dir owned by the cloner; CI exports
+  `VISOR_USER="$(id -u):$(id -g)"`; compose sets `init: true` so crash-loops
+  show up in `docker logs`. Verified with a full fresh-clone run
+  (clone → build → up → smoke suite) and green GitHub CI on `7f200d2`.
+
 ## [1.4.0] — 2026-09-14
 
 - **Connectors between blocks** (v1.4 headliner): board-level `links`
@@ -63,3 +86,4 @@ All notable changes to Visor. Format loosely follows
 
 - Initial release: SSE block store, infinite pan/zoom canvas, block types
   (section, text, todo, table, stat, chart, code, image, html), CLI.
+

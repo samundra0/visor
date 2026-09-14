@@ -199,12 +199,23 @@ Dockerfile       python:3.12-alpine, stateless (state in ./data volume)
 docker-compose.yml  restart: unless-stopped; VISOR_USER env for your uid:gid
 hermes/          Hermes plugin (visor_push tool, incl. links) + install.sh
 docs/agent-setup.md  the prompt to give any agent
+scripts/smoke.py end-to-end smoke test against a running :8900
+.github/workflows/ci.yaml  builds the image and runs the smoke test on every push
+data/.gitkeep    keeps the bind-mount dir in the repo so a fresh clone
+                 creates it owned by the cloner (Docker would create it as
+                 root → PermissionError on first start; see CHANGELOG 1.4.1)
 ```
 
 Rebuild after changes: `docker compose build -q && docker compose up -d`.
+(If the container already exists, `docker compose up -d` won't pick up the
+new image — `docker rm -f visor` first, then up.)
+
 Lint the client JS before rebuilding: extract the `<script>` and `node --check`
 it — a single syntax error silently kills the whole page (the script is one
 blob).
+
+Test: `python3 scripts/smoke.py` (server must be running) — boards, blocks,
+links CRUD, error codes, SSE, media, exports. Same suite runs in CI.
 
 Environment:
 
