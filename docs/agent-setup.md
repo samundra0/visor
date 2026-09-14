@@ -73,6 +73,28 @@ crowd a single column.
 move. This is how you keep a live counter or refresh a table while working.
 `DELETE /api/blocks/<id>?board=<id>` removes a card.
 
+### Connectors (links between blocks)
+
+When your findings are *related* — cause→effect, dependency A→B, pipeline
+stages — connect them instead of just placing cards near each other. Push the
+blocks first, then link by the returned ids:
+
+```
+POST /api/links?board=<id>
+Content-Type: application/json
+
+{"from": "<blockId>", "to": "<blockId>", "label": "optional short label"}
+```
+
+- Arrows are curved, labeled, and **follow their cards** automatically —
+  they never need repositioning.
+- Direction matters: `from` → `to` (arrowhead lands on `to`).
+- Duplicate `from`→`to` pairs are rejected (409); label is optional.
+- `PATCH /api/links/<id>?board=<id> {"label":"..."}` renames;
+  `DELETE /api/links/<id>?board=<id>` removes.
+- Deleting a block prunes its links — no stale arrows.
+- Use links sparingly: 2–4 per board to show structure, not a hairball.
+
 ## Style rules
 
 - One section header + the findings that read best in the *right* block type.

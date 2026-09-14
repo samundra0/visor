@@ -48,6 +48,39 @@ assert "event:" in data or "200" in data, data[:100]
 print("sse OK")
 s.close()
 
+# links: create between two blocks, verify state, errors, prune
+import urllib.error
+def call_expect(code, method, path, obj=None):
+    data = json.dumps(obj).encode() if obj is not None else None
+    req = urllib.request.Request(BASE + path, data=data,
+        headers={"Content-Type": "application/json"} if data else {}, method=method)
+    try:
+        with urllib.request.urlopen(req) as r:
+            return r.status, json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read() or b"{}")
+
+b2 = call("POST", f"/api/blocks?board={bq}",
+          {"type": "text", "title": "b2", "data": {"text": "x"}})
+lk = call("POST", f"/api/links?board={bq}",
+          {"from": blk, "to": b2["id"], "label": "rel"})
+lid = lk["id"]
+stt = call("GET", f"/api/state?board={bq}")
+assert any(l["id"] == lid for l in stt.get("links", [])), stt
+print("link create + state OK")
+st, _ = call_expect(409, "POST", f"/api/links?board={bq}", {"from": blk, "to": b2["id"]})
+st, _ = call_expect(400, "POST", f"/api/links?board={bq}", {"from": blk, "to": blk})
+st, _ = call_expect(404, "POST", f"/api/links?board={bq}", {"from": blk, "to": "nope"})
+print("link errors (409/400/404) OK")
+lk2 = call("PATCH", f"/api/links/{lid}?board={bq}", {"label": "renamed"})
+stt = call("GET", f"/api/state?board={bq}")
+assert stt["links"][0]["label"] == "renamed", stt
+print("link patch OK")
+call("DELETE", f"/api/blocks/{b2['id']}?board={bq}")
+stt = call("GET", f"/api/state?board={bq}")
+assert stt.get("links", []) == [], stt
+print("link prune on block delete OK")
+
 # cleanup
 call("DELETE", f"/api/boards/{bq}")
 print("cleaned up — SMOKE PASS")

@@ -44,9 +44,9 @@ hover — while you do something else.
 |---|---|
 | **Blocks** | `section`, `text` (markdown), `todo` (clickable checklist), `table`, `stat` (KPI cards), `chart` (bar/line/donut/hbar SVG with hover tooltips), `code`, `image`, `audio` (labeled rack + *play in sequence* — built for A/B comparisons), `video`, `html` (raw markup) |
 | **Boards** | named, switchable tabs; create/rename/delete; per-board camera position; block counts in tabs |
-| **Canvas** | infinite pan/zoom, drag cards, snap-to-grid toggle (G), one-click auto-align (⇧G), double-click to focus a card, fit view, **minimap** (M, click/drag to recenter), **select + arrow-key nudge** (Shift = grid step), **wide cards** (`w:2`) |
+| **Canvas** | infinite pan/zoom, drag cards, snap-to-grid toggle (G), one-click auto-align (⇧G), double-click to focus a card, fit view, **minimap** (M, click/drag to recenter), **select + arrow-key nudge** (Shift = grid step), **wide cards** (`w:2`), **connectors** — drag a card's edge dot to another card (or push `links` via the API) for curved labeled arrows that follow their cards; click a link to select, Del or ✕ removes it |
 | **Live updates** | SSE — blocks appear/update/remove in place; the agent can PATCH one block (e.g. bump a counter) without touching the rest; **auto-resync after a server restart** (events missed while down are re-fetched) |
-| **Export** | any board → standalone offline HTML snapshot (E or the tab's ↧) that keeps layout, charts, and media; **PNG snapshot** of the whole board (P or the tab's ▣), up to 2x scale |
+| **Export** | any board → standalone offline HTML snapshot (E or the tab's ↧) that keeps layout, charts, connectors, and media; **PNG snapshot** of the whole board (P or the tab's ▣), up to 2x scale |
 | **State** | JSON store on a Docker volume; survives reboots (`restart: unless-stopped`) and image rebuilds; media files staged into `data/media/` |
 | **Zero dependencies** | server = Python stdlib; client = one HTML file, no framework, no chart library |
 
@@ -143,6 +143,15 @@ PATCH /api/boards/<id> {"title":"Y"}
 DELETE /api/blocks/<id> | /api/boards/<id>
 POST /api/clear?board=<id>     {"type": "table"?}   (wipe board, optionally by type)
 POST /api/meta?board=<id>      {"title":"..."}      (board title)
+
+POST   /api/links?board=<id>   {"from":"<blockId>","to":"<blockId>","label":"?"}
+                                          -> 200 {"id":"lk..."} (curved arrow between
+                                          the two blocks; 409 if already linked)
+PATCH  /api/links/<id>?board=<id>  {"label":"..."}   (rename)
+DELETE /api/links/<id>?board=<id>
+                                          (links prune themselves when either
+                                          endpoint block is deleted or the board
+                                          is cleared)
 GET /media/<file>              → staged media (the server copies files for you
                                  if you write into data/media/ yourself)
 ```
@@ -154,6 +163,18 @@ respects the grid.
 
 `focus: true` in a POST centers the camera on that block (great for pushing a
 video to a busy board).
+
+### Connectors (links between blocks)
+
+Links are board-level relations — `GET /api/state` includes `links: [...]`.
+They render as curved indigo arrows with arrowheads and optional labels, on an
+SVG layer that pan/zooms with the canvas and **follows their cards
+automatically** (drag a card and every attached arrow re-routes; the camera
+never moves). Users can also create links by hand: hover a card and drag one
+of its four edge dots onto another card. Agents create them via the API —
+push the blocks first, then link by the returned ids (the `links` param of
+`visor_push` / the MCP tool does exactly this in one call). Deleting a block
+prunes its links server-side, so stale arrows never linger.
 
 ### Example: an audio A/B comparison (real payload)
 
@@ -171,12 +192,12 @@ same mix, model outputs before/after a prompt tweak.
 ## Development
 
 ```
-server.py        stdlib HTTP server: state store, SSE, media, boards
-index.html       the whole client (canvas, blocks, charts, boards UI)
-visor.py         CLI
+server.py        stdlib HTTP server: state store, SSE, media, boards, links
+index.html       the whole client (canvas, blocks, charts, links, boards UI)
+visor.py         CLI (blocks, boards, links)
 Dockerfile       python:3.12-alpine, stateless (state in ./data volume)
 docker-compose.yml  restart: unless-stopped; VISOR_USER env for your uid:gid
-hermes/          Hermes plugin (visor_push tool) + install.sh
+hermes/          Hermes plugin (visor_push tool, incl. links) + install.sh
 docs/agent-setup.md  the prompt to give any agent
 ```
 

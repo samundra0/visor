@@ -104,6 +104,24 @@ VISOR_PUSH_SCHEMA: Dict[str, Any] = {
                     "type": "boolean",
                     "description": "After pushing, center the camera on the LAST block. Useful for long content (video) pushed to a busy board.",
                 },
+                "links": {
+                    "type": "array",
+                    "description": (
+                        "Optional connectors between blocks — curved arrows drawn on the canvas "
+                        "that follow their cards. Each: {from: blockId, to: blockId, label?}. "
+                        "Ids are the block ids returned by this or a prior visor_push (the response "
+                        "lists each pushed block's id). Push the blocks first, then the links."
+                    ),
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "from": {"type": "string", "description": "Source block id."},
+                            "to": {"type": "string", "description": "Target block id."},
+                            "label": {"type": "string", "description": "Optional label shown on the arrow."},
+                        },
+                        "required": ["from", "to"],
+                    },
+                },
             },
             "required": ["blocks"],
         },
@@ -255,6 +273,18 @@ def _handle_visor_push(args: Dict[str, Any], **_kw: Any) -> str:
                 payload["focus"] = True
             res = _http("POST", f"/api/blocks{q}", payload)
             out["blocks"].append({"id": res.get("id"), "type": btype})
+        for l in args.get("links", []) or []:
+            src, dst = l.get("from"), l.get("to")
+            if not src or not dst:
+                out.setdefault("links", []).append({"error": "need from and to"})
+                continue
+            try:
+                lr = _http("POST", f"/api/links{q}",
+                           {"from": src, "to": dst, "label": l.get("label", "")})
+                out.setdefault("links", []).append({"id": lr.get("id")})
+            except Exception as e:
+                out.setdefault("links", []).append(
+                    {"error": f"{src}->{dst}: {e}"})
         out["board"] = board
         out["note"] = (
             f"Blocks are live on board {board!r} at {BASE}. Switch boards via the "

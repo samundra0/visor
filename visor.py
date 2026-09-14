@@ -29,6 +29,11 @@ Blocks (cont.):
   visor.py rm <id>
   visor.py clear [type]
 
+Links (connectors between blocks):
+  visor.py link <fromId> <toId> ["label"]
+  visor.py unlink <linkId>
+  visor.py links                    # list links with block titles
+
   Add --wide to any block command to push a 2-column-wide card.
 """
 import json
@@ -210,6 +215,23 @@ def main():
             print(f"{b['id']}  {b['type']:8}  {b['seq']:>3}  {t}")
         if not st["blocks"]:
             print("(empty)")
+    elif cmd == "link":
+        label = rest[2] if len(rest) > 2 else ""
+        r = post(f"/api/links{bq}", {"from": rest[0], "to": rest[1], "label": label})
+        print(f"linked {rest[0]} -> {rest[1]}  (link {r['id']})")
+    elif cmd == "unlink":
+        req = urllib.request.Request(BASE + f"/api/links/{urllib.parse.quote(rest[0])}{bq}", method="DELETE")
+        urllib.request.urlopen(req, timeout=10)
+        print(f"unlinked {rest[0]}")
+    elif cmd == "links":
+        with urllib.request.urlopen(BASE + f"/api/state{bq}", timeout=10) as r:
+            st = json.loads(r.read())
+        titles = {b["id"]: (b.get("title") or b["type"]) for b in st["blocks"]}
+        for l in st.get("links", []):
+            print(f"{l['id']}  {l['from']} ({titles.get(l['from'],'?')}) -> {l['to']} ({titles.get(l['to'],'?')})"
+                  + (f"  [{l['label']}]" if l.get("label") else ""))
+        if not st.get("links"):
+            print("(no links)")
     elif cmd == "rm":
         req = urllib.request.Request(BASE + f"/api/blocks/{rest[0]}{bq}", method="DELETE")
         urllib.request.urlopen(req, timeout=10)

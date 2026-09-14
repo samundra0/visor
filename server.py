@@ -11,8 +11,12 @@ board id so clients can update tab counts without a full refetch.
 
 Store v2 schema:
   {"v": 2, "order": ["main", ...],
-   "boards": {"<id>": {"title", "seq", "blocks": [...]} }}
+   "boards": {"<id>": {"title", "seq", "blocks": [...],
+                       "links": [{"id", "from", "to", "label"}]}} }}
 Store v1 ({"title","seq","blocks"}) is migrated to a single "main" board on load.
+Links are board-level (cross-block relations): a link connects two block ids
+on the same board and is pruned when either endpoint is deleted or the board
+is cleared.
 """
 import json
 import mimetypes
@@ -44,7 +48,7 @@ DEFAULT_BOARD = "main"
 
 
 def _new_board(title):
-    return {"title": title, "seq": 0, "blocks": []}
+    return {"title": title, "seq": 0, "blocks": [], "links": []}
 
 
 def load():
@@ -55,13 +59,17 @@ def load():
     with open(STORE) as f:
         st = json.load(f)
     if st.get("v") == 2 and st.get("boards"):
+        # normalize: older v2 boards may lack the "links" key
+        for b in st["boards"].values():
+            b.setdefault("links", [])
         return st
     # v1 (or empty) migration
     st = {"v": 2, "order": [DEFAULT_BOARD],
           "boards": {DEFAULT_BOARD: {
               "title": st.get("title", "Visor"),
               "seq": st.get("seq", 0),
-              "blocks": st.get("blocks", [])}}}
+              "blocks": st.get("blocks", []),
+              "links": []}}}
     save(st)
     return st
 
@@ -100,6 +108,17 @@ def ensure_board(st, bid, title_hint=""):
 def board_title(st, bid):
     b = get_board(st, bid)
     return b["title"] if b else bid
+
+
+def prune_links(b):
+    """Drop links whose endpoints no longer exist (block deleted / cleared).
+    Returns True if anything was removed."""
+    ids = {x["id"] for x in b["blocks"]}
+    keep = [l for l in b.get("links", []) if l["from"] in ids and l["to"] in ids]
+    if len(keep) != len(b.get("links", [])):
+        b["links"] = keep
+        return True
+    return False
 
 
 def broadcast(event):
@@ -241,8 +260,13 @@ class Handler(BaseHTTPRequestHandler):
                     b["blocks"] = [x for x in b["blocks"] if x["type"] != t]
                 else:
                     b["blocks"] = []
+                if not t:
+                    b["links"] = []
+                else:
+                    prune_links(b)
                 save(st)
                 broadcast({"op": "boards"})
+                broadcast({"op": "links", "board": bid})
                 broadcast({"op": "clear", "board": bid})
             self._send(200, {"ok": True})
         elif u.path == "/api/meta":
@@ -272,11 +296,61 @@ class Handler(BaseHTTPRequestHandler):
                 broadcast({"op": "boards"})
                 created = {"id": candidate, "title": title}
             self._send(200, created)
+        elif u.path == "/api/links":
+            bid = self._board_param(body)
+            src, dst = str(body.get("from") or ""), str(body.get("to") or "")
+            label = str(body.get("label") or "")
+            with LOCK:
+                st = load()
+                b = get_board(st, bid)
+                if not b:
+                    self._send(404, {"error": f"no board {bid!r}"})
+                    return
+                ids = {x["id"] for x in b["blocks"]}
+                if not src or not dst:
+                    self._send(400, {"error": "need from and to block ids"})
+                    return
+                if src == dst:
+                    self._send(400, {"error": "self-link"})
+                    return
+                if src not in ids or dst not in ids:
+                    self._send(404, {"error": "unknown block id"})
+                    return
+                if any(l["from"] == src and l["to"] == dst for l in b["links"]):
+                    self._send(409, {"error": "link already exists"})
+                    return
+                link = {"id": uuid.uuid4().hex[:10], "from": src,
+                        "to": dst, "label": label}
+                b["links"].append(link)
+                save(st)
+                broadcast({"op": "links", "board": bid})
+            self._send(200, link)
         else:
             self._send(404, {"error": "not found"})
 
     def do_PATCH(self):
         u = urlparse(self.path)
+        lm = re.match(r"^/api/links/([\w-]+)$", u.path)
+        if lm:
+            lid = lm.group(1)
+            body = self._body()
+            target = self._board_param(body)
+            with LOCK:
+                st = load()
+                b = get_board(st, target)
+                if not b:
+                    self._send(404, {"error": f"no board {target!r}"})
+                    return
+                link = next((l for l in b["links"] if l["id"] == lid), None)
+                if not link:
+                    self._send(404, {"error": "no link"})
+                    return
+                if "label" in body:
+                    link["label"] = str(body["label"])
+                save(st)
+                broadcast({"op": "links", "board": target})
+                self._send(200, link)
+            return
         m = re.match(r"^/api/blocks/([\w-]+)$", u.path)
         if not m:
             bm = re.match(r"^/api/boards/([\w-]+)$", u.path)
@@ -321,6 +395,25 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         u = urlparse(self.path)
+        lm = re.match(r"^/api/links/([\w-]+)$", u.path)
+        if lm:
+            lid = lm.group(1)
+            target = self._board_param()
+            with LOCK:
+                st = load()
+                b = get_board(st, target)
+                if not b:
+                    self._send(404, {"error": f"no board {target!r}"})
+                    return
+                before = len(b["links"])
+                b["links"] = [l for l in b["links"] if l["id"] != lid]
+                if len(b["links"]) == before:
+                    self._send(404, {"error": "no link"})
+                    return
+                save(st)
+                broadcast({"op": "links", "board": target})
+                self._send(200, {"ok": True})
+            return
         m = re.match(r"^/api/blocks/([\w-]+)$", u.path)
         if not m:
             bm = re.match(r"^/api/boards/([\w-]+)$", u.path)
@@ -355,7 +448,10 @@ class Handler(BaseHTTPRequestHandler):
             if len(b["blocks"]) == before:
                 self._send(404, {"error": "no block"})
                 return
+            pruned = prune_links(b)
             save(st)
+            if pruned:
+                broadcast({"op": "links", "board": target})
             broadcast({"op": "del", "id": bid, "board": target})
             self._send(200, {"ok": True})
 

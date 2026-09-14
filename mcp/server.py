@@ -27,7 +27,7 @@ BASE = os.environ.get("VISOR_URL", "http://127.0.0.1:8900").rstrip("/")
 HOME = os.environ.get("VISOR_HOME") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MEDIA_DIR = os.path.join(HOME, "data", "media")
 AUTO_START = os.environ.get("VISOR_AUTO_START", "1") != "0"
-SERVER_INFO = {"name": "visor", "version": "1.2.0"}
+SERVER_INFO = {"name": "visor", "version": "1.4.0"}
 PROTOCOL_FALLBACK = "2025-06-18"
 
 BLOCK_TYPES = ["section", "text", "todo", "table", "stat", "chart", "code",
@@ -78,6 +78,23 @@ TOOL_PUSH = {
             "clear": {"type": "boolean", "description": "Clear the board first."},
             "focus": {"type": "boolean",
                       "description": "Center the camera on the last pushed block (videos on busy boards)."},
+            "links": {
+                "type": "array",
+                "description": ("Optional connectors between blocks — curved arrows drawn on the "
+                                 "canvas that follow their cards. Each: {from: blockId, to: blockId, "
+                                 "label?}. Ids are the block ids returned by a prior visor_push "
+                                 "(the response lists each pushed block's id). Push the blocks "
+                                 "first, then the links."),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "from": {"type": "string", "description": "Source block id."},
+                        "to": {"type": "string", "description": "Target block id."},
+                        "label": {"type": "string", "description": "Optional label on the arrow."},
+                    },
+                    "required": ["from", "to"],
+                },
+            },
         },
         "required": ["blocks"],
     },
@@ -172,6 +189,17 @@ def tool_push(args):
             payload["focus"] = True
         res = _http("POST", f"/api/blocks{q}", payload)
         out["blocks"].append({"id": res.get("id"), "type": btype})
+    for l in args.get("links") or []:
+        src, dst = l.get("from"), l.get("to")
+        if not src or not dst:
+            out.setdefault("links", []).append({"error": "need from and to"})
+            continue
+        try:
+            lr = _http("POST", f"/api/links{q}",
+                       {"from": src, "to": dst, "label": l.get("label", "")})
+            out.setdefault("links", []).append({"id": lr.get("id")})
+        except Exception as e:
+            out.setdefault("links", []).append({"error": f"{src}->{dst}: {e}"})
     out["note"] = (f"Live on board {board!r} at {BASE} — the user sees it on the "
                    "Visor canvas (tabs top-left). Update one block later: "
                    f"PATCH /api/blocks/<id>?board={board}.")

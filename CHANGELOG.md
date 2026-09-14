@@ -3,6 +3,26 @@
 All notable changes to Visor. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.0] — 2026-09-14
+
+- **Connectors between blocks** (v1.4 headliner): board-level `links`
+  (`{"from": blockId, "to": blockId, "label"?}`) render as curved, labeled
+  indigo arrows on an SVG layer that pan/zooms with the canvas. Two creation
+  paths: drag a card's edge dot onto another card in the UI, or push links
+  via the API (`POST/PATCH/DELETE /api/links`, board-scoped). Arrows
+  **auto-follow** their cards on drag, nudge, align, and remote (SSE) moves —
+  the camera never moves. Click a link to select (red + ✕); Del/Backspace or
+  the ✕ removes it. Links prune themselves when either endpoint block is
+  deleted or the board is cleared. Both exports (HTML `E`, PNG `P`) include
+  the connectors. `visor_push` (Hermes plugin + MCP) and the CLI gain link
+  support: `links` param / `link`, `unlink`, `links` commands. New SSE op
+  `links`. Old stores load unchanged (additive key).
+- **Fixed**: in-place SSE position updates (a remote drag of a card) now
+  re-route attached links — caught by a real-browser CDP test asserting path
+  `d` changes with a byte-identical camera.
+- **Smoke test** extended with link CRUD, error codes (409/400/404), label
+  rename, and prune-on-block-delete coverage.
+
 ## [1.3.0] — 2026-09-14
 
 - **PNG export**: whole-board snapshot as an image (P key or the tab's ▣), up to

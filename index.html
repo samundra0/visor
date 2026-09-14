@@ -102,6 +102,24 @@ pre.code .lang{display:block;font-size:9.5px;font-weight:700;letter-spacing:.12e
 .blk.selected{border-color:var(--acc);box-shadow:0 0 0 2px rgba(79,70,229,.25),var(--shadow-hover);z-index:50}
 .blk .bar .wbtn{cursor:pointer;color:var(--faint);font-size:12px;line-height:1;padding:3px 5px;border-radius:6px}
 .blk .bar .wbtn:hover{color:var(--acc);background:var(--acc2)}
+/* link anchors (drag from a card edge to another card to create a link) */
+.anch{position:absolute;width:13px;height:13px;border-radius:50%;background:#fff;border:2px solid var(--acc);
+  opacity:0;pointer-events:none;transform:translate(-50%,-50%);z-index:60;transition:opacity .12s,background .12s}
+.blk:hover .anch{opacity:.9;pointer-events:auto}
+.anch:hover{background:var(--acc);transform:translate(-50%,-50%) scale(1.25)}
+.anch.t{top:0;left:50%}.anch.b{bottom:0;left:50%;top:auto}
+.anch.l{top:50%;left:0}.anch.r{top:50%;left:100%}
+/* link layer (SVG inside #world — pan/zooms with the canvas for free) */
+#links{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
+#links path.vis{fill:none;stroke:var(--acc);stroke-width:2}
+#links path.hit{fill:none;stroke:transparent;stroke-width:14;pointer-events:stroke;cursor:pointer}
+#links path.tmp{fill:none;stroke:var(--acc);stroke-width:2;stroke-dasharray:6 5;opacity:.7}
+#links text{font-size:11px;font-weight:600;fill:var(--acc);paint-order:stroke;stroke:var(--bg);stroke-width:3.5}
+#links g.sel path.vis{stroke:var(--bad)}
+#links g.sel text{fill:var(--bad)}
+#links g.lkdel{pointer-events:auto;cursor:pointer}
+#links g.lkdel circle{fill:#fff;stroke:var(--bad);stroke-width:1.5}
+#links g.lkdel text{stroke:none;fill:var(--bad);font-size:9px;font-weight:700}
 /* minimap */
 #minimap{position:fixed;left:16px;bottom:18px;z-index:20;background:rgba(255,255,255,.92);
   backdrop-filter:blur(8px);border:1px solid var(--line2);border-radius:10px;padding:5px;
@@ -158,7 +176,20 @@ pre.code .lang{display:block;font-size:9.5px;font-weight:700;letter-spacing:.12e
 </head>
 <body>
 <div id="grid"></div>
-<div id="world"></div>
+<div id="world">
+  <svg id="links" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="#4f46e5"/>
+      </marker>
+      <marker id="arw-sel" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0 0 L10 5 L0 10 z" fill="#dc2626"/>
+      </marker>
+    </defs>
+    <g id="lks"></g>
+    <path id="lktmp" class="tmp" d=""/>
+  </svg>
+</div>
 <div class="empty" id="empty"><div><div class="b">Visor</div><div class="w">waiting for data…</div></div></div>
 <div id="hud">
   <div class="brand"><div class="t">VISOR</div></div>
@@ -166,7 +197,7 @@ pre.code .lang{display:block;font-size:9.5px;font-weight:700;letter-spacing:.12e
 </div>
 <div id="status"><span class="dot"></span><span id="statTxt">connecting</span></div>
 <div id="minimap"><canvas id="mm" width="360" height="240"></canvas></div>
-<div id="hint">scroll: zoom · drag: pan · drag card: move · click card: select (arrows nudge · Esc deselect) · G: snap · ⇧G: align · M: map · E: export HTML · P: export PNG</div>
+<div id="hint">scroll: zoom · drag: pan · drag card: move · click card: select (arrows nudge · Esc deselect) · drag a card's edge dot to another card: link · click link: select (Del removes) · G: snap · ⇧G: align · M: map · E: export HTML · P: export PNG</div>
 <div id="ctl">
   <button id="gsnap" title="toggle snap to grid while dragging (G)">⌗ snap</button>
   <button id="galign" title="re-flow all blocks onto the grid so nothing overlaps (Shift+G)">⌗ align all</button>
@@ -189,6 +220,11 @@ const manual = new Map();
 let currentBoard = DEFAULT_BOARD;
 let boards = [];             // [{id,title,blocks,ts}]
 let connected = false;
+let links = [];              // current board's links [{id,from,to,label}]
+let selectedLink = null;     // link id under selection
+const linksEl = document.getElementById('links');
+const lksG = document.getElementById('lks');
+const lktmp = document.getElementById('lktmp');
 
 const CHART_COLORS = ['#4f46e5','#0ea5e9','#f59e0b','#16a34a','#dc2626','#8b5cf6','#0d9488','#db2777'];
 
@@ -417,6 +453,14 @@ function makeEl(b){
     const w = (b.w||1) >= 2 ? 1 : 2;
     patchBlock(b.id, {w});
   });
+  for (const edge of ['t','r','b','l']){
+    const a = document.createElement('span');
+    a.className = 'anch ' + edge;
+    a.dataset.edge = edge;
+    a.title = 'drag to another card to link';
+    a.addEventListener('pointerdown', e => startLinkDrag(e, b.id, edge));
+    el.appendChild(a);
+  }
   el.addEventListener('pointerdown', () => { selectBlock(b.id); });
   el.querySelectorAll('.todo li').forEach(li => li.addEventListener('click', () => {
     const i = +li.dataset.i; const it = blocks.get(b.id)?.meta.data?.items?.[i];
@@ -462,6 +506,7 @@ function placeAll(){
     const p = layout.get(rec.meta.id);
     if (p) rec.el.style.transform = `translate(${p.x}px, ${p.y}px)`;
   }
+  drawLinks();
   requestAnimationFrame(() => {
     let changed = false;
     for (const rec of list){
@@ -530,6 +575,7 @@ function focusEl(el){
 /* ---------- selection + nudge ---------- */
 let selectedId = null;
 function selectBlock(id){
+  if (selectedLink){ selectedLink = null; drawLinks(); }
   if (id === selectedId) return;
   if (selectedId){ const o = blocks.get(selectedId); o?.el?.classList.remove('selected'); }
   selectedId = id || null;
@@ -548,12 +594,146 @@ function nudgeSelected(dx, dy){
   rec.el.style.transform = `translate(${nx}px,${ny}px)`;
   rec.meta.x = nx; rec.meta.y = ny;
   patchBlock(b.id, {x:nx, y:ny});
+  drawLinks();
   drawMinimap();
+}
+
+/* ================= links (connectors between blocks) ================= */
+/* Board-level links {id, from, to, label} drawn as curved arrows on an SVG
+   layer inside #world — so they pan/zoom with the canvas for free and follow
+   cards automatically (drawLinks recomputes from layout + live sizes). */
+const SVGNS = 'http://www.w3.org/2000/svg';
+function cardRect(id){
+  const p = layout.get(id); const el = blocks.get(id)?.el;
+  if (!p || !el) return null;
+  return {x: p.x, y: p.y, w: el.offsetWidth || COL_W, h: el.offsetHeight || 100};
+}
+function edgePoint(r, edge){
+  if (edge === 't') return {x: r.x + r.w/2, y: r.y};
+  if (edge === 'b') return {x: r.x + r.w/2, y: r.y + r.h};
+  if (edge === 'l') return {x: r.x, y: r.y + r.h/2};
+  return {x: r.x + r.w, y: r.y + r.h/2};
+}
+// which edge of rect r faces point p (dominant axis, aspect-weighted)
+function edgeToward(r, px, py){
+  const cx = r.x + r.w/2, cy = r.y + r.h/2;
+  const dx = px - cx, dy = py - cy;
+  if (Math.abs(dx) * r.h > Math.abs(dy) * r.w) return dx > 0 ? 'r' : 'l';
+  return dy > 0 ? 'b' : 't';
+}
+function outHandle(p, edge, k){
+  if (edge === 'r') return {x: p.x + k, y: p.y};
+  if (edge === 'l') return {x: p.x - k, y: p.y};
+  if (edge === 'b') return {x: p.x, y: p.y + k};
+  return {x: p.x, y: p.y - k};
+}
+// cubic bezier between two cards, exiting each from the facing edge
+function linkGeom(fromId, toId){
+  const ra = cardRect(fromId), rb = cardRect(toId);
+  if (!ra || !rb) return null;
+  const ca = {x: ra.x + ra.w/2, y: ra.y + ra.h/2};
+  const cb = {x: rb.x + rb.w/2, y: rb.y + rb.h/2};
+  const ea = edgeToward(ra, cb.x, cb.y), eb = edgeToward(rb, ca.x, ca.y);
+  const pa = edgePoint(ra, ea), pb = edgePoint(rb, eb);
+  const k = Math.min(160, Math.max(40, Math.hypot(pb.x - pa.x, pb.y - pa.y) * 0.35));
+  const c1 = outHandle(pa, ea, k), c2 = outHandle(pb, eb, k);
+  // label sits at the curve's t=0.5 point
+  const lx = (pa.x + 3*c1.x + 3*c2.x + pb.x) / 8;
+  const ly = (pa.y + 3*c1.y + 3*c2.y + pb.y) / 8;
+  return {d: `M${pa.x.toFixed(1)} ${pa.y.toFixed(1)} C${c1.x.toFixed(1)} ${c1.y.toFixed(1)} ${c2.x.toFixed(1)} ${c2.y.toFixed(1)} ${pb.x.toFixed(1)} ${pb.y.toFixed(1)}`, lx, ly};
+}
+function drawLinks(){
+  lksG.textContent = '';
+  for (const L of links){
+    const g = document.createElementNS(SVGNS, 'g');
+    g.dataset.lid = L.id;
+    const geo = linkGeom(L.from, L.to);
+    if (geo){
+      const hit = document.createElementNS(SVGNS, 'path');
+      hit.setAttribute('class', 'hit'); hit.setAttribute('d', geo.d);
+      hit.addEventListener('click', ev => { ev.stopPropagation(); selectLink(L.id); });
+      const vis = document.createElementNS(SVGNS, 'path');
+      vis.setAttribute('class', 'vis'); vis.setAttribute('d', geo.d);
+      vis.setAttribute('marker-end', 'url(#arw)');
+      g.appendChild(hit); g.appendChild(vis);
+      if (L.label){
+        const t = document.createElementNS(SVGNS, 'text');
+        t.setAttribute('x', geo.lx); t.setAttribute('y', geo.ly - 6);
+        t.setAttribute('text-anchor', 'middle');
+        t.textContent = L.label;
+        g.appendChild(t);
+      }
+      if (selectedLink === L.id){
+        g.classList.add('sel');
+        vis.setAttribute('marker-end', 'url(#arw-sel)');
+        const del = document.createElementNS(SVGNS, 'g');
+        del.setAttribute('class', 'lkdel');
+        const c = document.createElementNS(SVGNS, 'circle');
+        c.setAttribute('cx', geo.lx); c.setAttribute('cy', geo.ly); c.setAttribute('r', 9);
+        const xt = document.createElementNS(SVGNS, 'text');
+        xt.setAttribute('x', geo.lx); xt.setAttribute('y', geo.ly + 3);
+        xt.setAttribute('text-anchor', 'middle'); xt.textContent = '✕';
+        del.appendChild(c); del.appendChild(xt);
+        del.addEventListener('click', ev => { ev.stopPropagation(); deleteLink(L.id); });
+        g.appendChild(del);
+      }
+    }
+    lksG.appendChild(g);
+  }
+}
+function selectLink(lid){
+  selectedLink = (selectedLink === lid) ? null : lid;
+  // clear block selection directly (selectBlock(null) would also clear
+  // selectedLink, undoing what we just set)
+  if (selectedId){ const o = blocks.get(selectedId); o?.el?.classList.remove('selected'); selectedId = null; }
+  drawMinimap();
+  drawLinks();
+}
+async function createLink(from, to, label){
+  try {
+    await fetch(`/api/links?board=${encodeURIComponent(currentBoard)}`, {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({from, to, label})});
+  } catch(e){}
+  refreshLinks();
+}
+async function deleteLink(lid){
+  try {
+    await fetch(`/api/links/${encodeURIComponent(lid)}?board=${encodeURIComponent(currentBoard)}`, {method:'DELETE'});
+  } catch(e){}
+  refreshLinks();
+}
+async function refreshLinks(){
+  try {
+    const st = await fetch(`/api/state?board=${encodeURIComponent(currentBoard)}`).then(r=>r.json());
+    links = st.links || [];
+    if (selectedLink && !links.some(l => l.id === selectedLink)) selectedLink = null;
+    drawLinks();
+  } catch(e){}
+}
+function startLinkDrag(e, fromId, edge){
+  if (e.button !== 0) return;
+  e.stopPropagation(); e.preventDefault();
+  const move = ev => {
+    const wx = (ev.clientX - view.x)/view.s, wy = (ev.clientY - view.y)/view.s;
+    const ra = cardRect(fromId); if (!ra) return;
+    const p = edgePoint(ra, edge);
+    const c1 = outHandle(p, edge, 40);
+    lktmp.setAttribute('d', `M${p.x} ${p.y} C${c1.x} ${c1.y} ${wx} ${wy} ${wx} ${wy}`);
+    lktmp.setAttribute('marker-end', 'url(#arw)');
+  };
+  const up = ev => {
+    removeEventListener('pointermove', move); removeEventListener('pointerup', up);
+    lktmp.setAttribute('d', '');
+    const t = document.elementFromPoint(ev.clientX, ev.clientY);
+    const card = t && t.closest ? t.closest('.blk') : null;
+    if (card && card.dataset.id && card.dataset.id !== fromId) createLink(fromId, card.dataset.id, '');
+  };
+  addEventListener('pointermove', move); addEventListener('pointerup', up);
 }
 
 let panning = null;
 addEventListener('pointerdown', e => {
-  if (e.target.closest('.blk') || e.target.closest('#ctl') || e.target.closest('#hud')) return;
+  if (e.target.closest('.blk') || e.target.closest('#ctl') || e.target.closest('#hud') || e.target.closest('#links')) return;
   panning = {sx:e.clientX, sy:e.clientY, vx:view.x, vy:view.y};
 });
 addEventListener('pointermove', e => {
@@ -570,10 +750,11 @@ addEventListener('wheel', e => {
 addEventListener('dblclick', e => {
   if (e.target.closest('.blk')) return;
   if (e.target.closest('#minimap')) return;
+  if (e.target.closest('#links')) return;
   zoomAt(e.clientX, e.clientY, 1.5);
 });
 addEventListener('click', e => {
-  if (e.target.closest('.blk') || e.target.closest('#hud') || e.target.closest('#ctl') || e.target.closest('#minimap')) return;
+  if (e.target.closest('.blk') || e.target.closest('#hud') || e.target.closest('#ctl') || e.target.closest('#minimap') || e.target.closest('#links')) return;
   selectBlock(null);
 });
 document.getElementById('zin').onclick = () => zoomAt(innerWidth/2, innerHeight/2, 1.25);
@@ -596,6 +777,9 @@ addEventListener('keydown', e => {
   if (e.key === 'e' || e.key === 'E'){ e.preventDefault(); exportBoard(); }
   if (e.key === 'p' || e.key === 'P'){ e.preventDefault(); exportPNG(); }
   if (e.key === 'Escape'){ selectBlock(null); return; }
+  if ((e.key === 'Delete' || e.key === 'Backspace') && selectedLink && !selectedId){
+    e.preventDefault(); deleteLink(selectedLink); return;
+  }
   if (e.key === 'ArrowLeft'  && selectedId){ e.preventDefault(); nudgeSelected(e.shiftKey?-GRID:-1, 0); }
   if (e.key === 'ArrowRight' && selectedId){ e.preventDefault(); nudgeSelected(e.shiftKey? GRID: 1, 0); }
   if (e.key === 'ArrowUp'    && selectedId){ e.preventDefault(); nudgeSelected(0, e.shiftKey?-GRID:-1); }
@@ -628,6 +812,7 @@ async function alignAll(){
     await fetch(`/api/blocks/${id}?board=${encodeURIComponent(currentBoard)}`, {method:'PATCH', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({x, y})});
   }
+  drawLinks();
 }
 
 /* ================= minimap ================= */
@@ -732,6 +917,7 @@ function startDrag(e, el, id){
     if (gridSnap){ const sp = snapPos(nx, ny); nx = sp.x; ny = sp.y; }
     layout.set(id,{x:nx,y:ny});
     el.style.transform = `translate(${nx}px,${ny}px)`;
+    drawLinks();
   };
   const mu = () => {
     removeEventListener('pointermove', mm); removeEventListener('pointerup', mu);
@@ -741,6 +927,7 @@ function startDrag(e, el, id){
       fetch(`/api/blocks/${id}?board=${encodeURIComponent(currentBoard)}`, {method:'PATCH', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({x: Math.round(p2.x), y: Math.round(p2.y)})});
     }
+    drawLinks();
   };
   addEventListener('pointermove', mm); addEventListener('pointerup', mu);
 }
@@ -785,6 +972,32 @@ function askDeleteBoard(bd){
   if (!confirm(`Delete board “${bd.title}” and its ${bd.blocks} block(s)?`)) return;
   fetch(`/api/boards/${encodeURIComponent(bd.id)}`, {method:'DELETE'});
 }
+// static SVG markup for the board's links, shifted by (-ox,-oy) — used by the
+// PNG and HTML exports (live page uses drawLinks on the in-world layer instead)
+function linksSVGMarkup(ox, oy){
+  const defs = `<defs><marker id="xarw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L10 5 L0 10 z" fill="#4f46e5"/></marker></defs>`;
+  let body = '';
+  for (const L of links){
+    const ra = cardRect(L.from), rb = cardRect(L.to);
+    if (!ra || !rb) continue;
+    const ca = {x: ra.x + ra.w/2, y: ra.y + ra.h/2};
+    const cb = {x: rb.x + rb.w/2, y: rb.y + rb.h/2};
+    const ea = edgeToward(ra, cb.x, cb.y), eb = edgeToward(rb, ca.x, ca.y);
+    const pa = edgePoint(ra, ea), pb = edgePoint(rb, eb);
+    const k = Math.min(160, Math.max(40, Math.hypot(pb.x - pa.x, pb.y - pa.y) * 0.35));
+    const c1 = outHandle(pa, ea, k), c2 = outHandle(pb, eb, k);
+    const S = p => `${(p.x - ox).toFixed(1)} ${(p.y - oy).toFixed(1)}`;
+    const dd = `M${S(pa)} C${S(c1)} ${S(c2)} ${S(pb)}`;
+    body += `<path d="${dd}" fill="none" stroke="#4f46e5" stroke-width="2" marker-end="url(#xarw)"/>`;
+    if (L.label){
+      const lx = (pa.x + 3*c1.x + 3*c2.x + pb.x) / 8 - ox;
+      const ly = (pa.y + 3*c1.y + 3*c2.y + pb.y) / 8 - oy - 6;
+      body += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" font-size="11" font-weight="600" fill="#4f46e5" stroke="#f6f7f9" stroke-width="3.5" paint-order="stroke" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,Helvetica,Arial,sans-serif">${esc(L.label)}</text>`;
+    }
+  }
+  if (!body) return '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" style="position:absolute;left:0;top:0;overflow:visible;pointer-events:none">${defs}${body}</svg>`;
+}
 function exportPNG(){
   // snapshot the whole board to a PNG: clone live cards into an SVG
   // foreignObject over the dot grid, rasterize at up to 2x, download.
@@ -806,6 +1019,8 @@ function exportPNG(){
   const wrap = document.createElement('div');
   wrap.style.cssText = `position:relative;width:${W}px;height:${H}px;overflow:hidden;`+
     `font:14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,Helvetica,Arial,sans-serif;color:#18181b;`;
+  const lsvg = linksSVGMarkup(x0, y0);   // links first, so cards paint on top
+  if (lsvg) wrap.insertAdjacentHTML('beforeend', lsvg);
   for (const it of items){
     const c = it.r.el.cloneNode(true);
     c.style.transform = 'none';
@@ -883,7 +1098,7 @@ html,body{overflow:auto;background:var(--bg)}
 #snaphead b{color:var(--txt);font-size:16px}
 </style></head><body>
 <div id="snaphead"><b>${esc(title)}</b> · exported from Visor · ${esc(ts)}</div>
-<div id="snap">${cards.join('')}</div>
+<div id="snap">${linksSVGMarkup(0, 0)}${cards.join('')}</div>
 </body></html>`;
   const blob = new Blob([html], {type:'text/html'});
   const a = document.createElement('a');
@@ -920,6 +1135,11 @@ async function apiDel(id){
   const rec = blocks.get(id);
   if (rec) rec.el.remove();
   blocks.delete(id); heights.delete(id); layout.delete(id); manual.delete(id);
+  // links touching a deleted block are pruned server-side; reflect locally now
+  // (the SSE links broadcast is the authoritative resync)
+  const before = links.length;
+  links = links.filter(L => L.from !== id && L.to !== id);
+  if (links.length !== before) drawLinks();
   refreshEmpty(); placeAll();
 }
 async function patchBlock(id, payload){
@@ -984,10 +1204,14 @@ function connect(){
           layout.delete(b.id);
           placeAll();
         }
+        drawLinks();
       });
     } else if (msg.op === 'del'){
       if (bid !== currentBoard){ refreshBoards(); return; }
       apiDel(msg.id);
+    } else if (msg.op === 'links'){
+      if (bid !== currentBoard){ refreshBoards(); return; }
+      refreshLinks();
     } else if (msg.op === 'clear'){
       if (bid !== currentBoard){ refreshBoards(); return; }
       // Debounce: an agent's "clear + push burst" arrives as clear-then-upserts.
@@ -1038,11 +1262,19 @@ async function boot(keepView){
   setBoardTitle(st.title || 'Visor');
   stopSeq();
   blocks.clear(); heights.clear(); layout.clear(); manual.clear();
-  world.innerHTML = '';
+  selectedLink = null;
+  for (const child of [...world.children]){
+    if (child !== linksEl) child.remove();
+  }
+  // keep the link layer BEHIND the cards: it must be #world's first child
+  // (cards are appended after it). Same z-order as the dot grid underneath.
+  world.insertBefore(linksEl, world.firstChild);
+  links = st.links || [];
   for (const b of (st.blocks||[])){
     blocks.set(b.id, {meta:b, el:null});
     applyBlock(b.id);
   }
+  drawLinks();
   refreshEmpty();
   if (keepView){
     if (!restoreView(currentBoard)) fitAll();
