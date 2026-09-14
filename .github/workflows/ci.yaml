@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build container
+        run: docker compose build -q
+
+      - name: Start
+        run: |
+          docker compose up -d
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8900/api/boards >/dev/null && break
+            sleep 1
+          done
+          curl -sf http://localhost:8900/api/boards
+
+      - name: Smoke test
+        run: python3 scripts/smoke.py
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v --remove-orphans || true

@@ -12,6 +12,12 @@ Built for agent workflows: every capability is one API call. Point any agent
 (Claude Code, Hermes, OpenAI-compatible tools, a cron job, a script) at the
 HTTP API and it can show you anything, anytime.
 
+![Visor — an agent's infra-audit board](screenshots/agent-findings.png)
+
+The board above (a sample "agent pushed me an audit" scenario) is one page:
+KPI cards, four chart types, a wide table, a clickable todo list, and a code
+block — all in place over SSE, no reload.
+
 ```
 ┌─────────────┐   POST /api/blocks   ┌──────────────────────────────┐
 │  your agent │ ───────────────────► │  visor (port 8900, Docker)   │
@@ -40,9 +46,11 @@ hover — while you do something else.
 | **Boards** | named, switchable tabs; create/rename/delete; per-board camera position; block counts in tabs |
 | **Canvas** | infinite pan/zoom, drag cards, snap-to-grid toggle (G), one-click auto-align (⇧G), double-click to focus a card, fit view, **minimap** (M, click/drag to recenter), **select + arrow-key nudge** (Shift = grid step), **wide cards** (`w:2`) |
 | **Live updates** | SSE — blocks appear/update/remove in place; the agent can PATCH one block (e.g. bump a counter) without touching the rest; **auto-resync after a server restart** (events missed while down are re-fetched) |
-| **Export** | any board → standalone offline HTML snapshot (E or the tab's ↧) that keeps layout, charts, and media |
+| **Export** | any board → standalone offline HTML snapshot (E or the tab's ↧) that keeps layout, charts, and media; **PNG snapshot** of the whole board (P or the tab's ▣), up to 2x scale |
 | **State** | JSON store on a Docker volume; survives reboots (`restart: unless-stopped`) and image rebuilds; media files staged into `data/media/` |
 | **Zero dependencies** | server = Python stdlib; client = one HTML file, no framework, no chart library |
+
+![Charts in Visor — bar, line, donut, horizontal bar](screenshots/charts.png)
 
 ## Quick start (you)
 
@@ -54,9 +62,11 @@ cd visor
 docker compose up -d          # builds + starts, http://localhost:8900
 ```
 
-Open **http://localhost:8900** — you'll see the (empty) canvas. Then give your
-agent the setup instructions in [docs/agent-setup.md](docs/agent-setup.md) and
-ask it to show you something.
+Open **http://localhost:8900** — you'll see the (empty) canvas. If the server
+can't save blocks with a permission error, your uid isn't 1000: set
+`VISOR_USER=$(id -u):$(id -g)` and rebuild. Then give your agent the setup
+instructions in [docs/agent-setup.md](docs/agent-setup.md) and ask it to show
+you something.
 
 Bare Python (no Docker):
 
@@ -145,18 +155,18 @@ respects the grid.
 `focus: true` in a POST centers the camera on that block (great for pushing a
 video to a busy board).
 
-### Example: a voice A/B comparison (real payload)
+### Example: an audio A/B comparison (real payload)
 
 ```json
-{"type":"audio","title":"TTS clones — A/B","data":{"items":[
-  {"label":"peter — reference clip","src":"/path/REF_peter.wav","note":"what the model heard"},
-  {"label":"peter — clone, fresh line","src":"/path/check_peter.wav","note":"model generated new words"}
+{"type":"audio","title":"Output A vs B","data":{"items":[
+  {"label":"variant A — baseline","src":"/path/baseline.wav","note":"before the change"},
+  {"label":"variant B — candidate","src":"/path/candidate.wav","note":"after the change"}
 ]}}
 ```
 
-Renders as labeled players with a **▶ play all in sequence** button. This is
-exactly how the pipeline that built visor's media support got verified:
-reference clips vs clones, side by side, one click.
+Renders as labeled players with a **▶ play all in sequence** button — handy
+for any side-by-side comparison: TTS clones vs references, two renders of the
+same mix, model outputs before/after a prompt tweak.
 
 ## Development
 
@@ -180,8 +190,8 @@ Environment:
 | var | default | meaning |
 |---|---|---|
 | `VISOR_DATA` | `./data` (host) / `/data` (container) | store + media dir |
-| `HOLO_PORT` / `VISOR_PORT` | `8900` | listen port |
-| `VISOR_USER` | `1000:1000` | uid:gid the container runs as (compose) |
+| `VISOR_PORT` | `8900` | listen port (`HOLO_PORT` accepted as legacy alias) |
+| `VISOR_USER` | `1000:1000` | uid:gid the container runs as (compose) — set this to your own uid:gid if your files aren't owned by 1000 (check with `id -u`/`id -g`), otherwise the server can't write `data/` |
 | `VISOR_HOME` | `~/code/visor` | project root for the Hermes plugin |
 
 ## Design notes & honest limits

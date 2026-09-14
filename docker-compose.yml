@@ -12,5 +12,5 @@ services:
       - ./data:/data
     environment:
       - VISOR_DATA=/data
-      - HOLO_PORT=8900
+      - VISOR_PORT=8900
     restart: unless-stopped

@@ -166,7 +166,7 @@ pre.code .lang{display:block;font-size:9.5px;font-weight:700;letter-spacing:.12e
 </div>
 <div id="status"><span class="dot"></span><span id="statTxt">connecting</span></div>
 <div id="minimap"><canvas id="mm" width="360" height="240"></canvas></div>
-<div id="hint">scroll: zoom · drag: pan · drag card: move · click card: select (arrows nudge · Esc deselect) · G: snap · ⇧G: align · M: map · E: export</div>
+<div id="hint">scroll: zoom · drag: pan · drag card: move · click card: select (arrows nudge · Esc deselect) · G: snap · ⇧G: align · M: map · E: export HTML · P: export PNG</div>
 <div id="ctl">
   <button id="gsnap" title="toggle snap to grid while dragging (G)">⌗ snap</button>
   <button id="galign" title="re-flow all blocks onto the grid so nothing overlaps (Shift+G)">⌗ align all</button>
@@ -248,13 +248,17 @@ function chartSVG(d){
   if (kind === 'hbar'){
     const vals = (series[0].values || []).map(Number);
     const rowH = Math.min(34, (H - PT - PB) / Math.max(1, vals.length));
+    // label gutter sized to the longest label (was a fixed 42px — clipped words like "integration")
+    const labelW = Math.min(130, Math.max(42, ...labels.map(l => (String(l).length * 6.4) + 14)));
+    const valW = 46; // room for the value to the right of the bar
+    const barX = labelW, barW = Math.max(20, W - PR - barX - valW);
     let y = PT;
     vals.forEach((v,i)=>{
-      const w = (v/max) * (iw - 130);
-      svg += `<text x="${PL-8}" y="${y+rowH/2+4}" text-anchor="end" font-size="11" fill="#52525b">${esc(labels[i]||'')}</text>
-        <rect x="${PL}" y="${y+4}" width="${iw-130}" height="${rowH-9}" rx="4" fill="#f1f1f4"/>
-        <rect x="${PL}" y="${y+4}" width="${Math.max(2,w)}" height="${rowH-9}" rx="4" fill="${CHART_COLORS[i%CHART_COLORS.length]}"><title>${esc(labels[i]||'')}: ${v}</title></rect>
-        <text x="${PL+w+6}" y="${y+rowH/2+4}" font-size="11" font-weight="700" fill="#3f3f46">${v}</text>`;
+      const w = (v/max) * barW;
+      svg += `<text x="${barX-8}" y="${y+rowH/2+4}" text-anchor="end" font-size="11" fill="#52525b">${esc(labels[i]||'')}</text>
+        <rect x="${barX}" y="${y+4}" width="${barW}" height="${rowH-9}" rx="4" fill="#f1f1f4"/>
+        <rect x="${barX}" y="${y+4}" width="${Math.max(2,w)}" height="${rowH-9}" rx="4" fill="${CHART_COLORS[i%CHART_COLORS.length]}"><title>${esc(labels[i]||'')}: ${v}</title></rect>
+        <text x="${barX+w+6}" y="${y+rowH/2+4}" font-size="11" font-weight="700" fill="#3f3f46">${v}</text>`;
       y += rowH;
     });
     return {svg: `<svg viewBox="0 0 ${W} ${H}">${svg}</svg>`, legend: ''};
@@ -590,6 +594,7 @@ addEventListener('keydown', e => {
   if (e.key === 'G' && e.shiftKey){ e.preventDefault(); document.getElementById('galign').click(); }
   if (e.key === 'm' || e.key === 'M'){ e.preventDefault(); toggleMinimap(); }
   if (e.key === 'e' || e.key === 'E'){ e.preventDefault(); exportBoard(); }
+  if (e.key === 'p' || e.key === 'P'){ e.preventDefault(); exportPNG(); }
   if (e.key === 'Escape'){ selectBlock(null); return; }
   if (e.key === 'ArrowLeft'  && selectedId){ e.preventDefault(); nudgeSelected(e.shiftKey?-GRID:-1, 0); }
   if (e.key === 'ArrowRight' && selectedId){ e.preventDefault(); nudgeSelected(e.shiftKey? GRID: 1, 0); }
@@ -748,11 +753,12 @@ function renderTabs(){
     const t = document.createElement('button');
     t.className = 'tab' + (bd.id === currentBoard ? ' on' : '');
     t.innerHTML = `<span class="nm">${esc(bd.title)}</span><span class="ct">${bd.blocks}</span>` +
-      (bd.id === currentBoard ? `<span class="ops"><button data-op="rename" title="rename">✎</button><button data-op="export" title="export board as HTML">↧</button><button data-op="del" title="delete (needs 2+ boards)">✕</button></span>` : '');
+      (bd.id === currentBoard ? `<span class="ops"><button data-op="rename" title="rename">✎</button><button data-op="export" title="export board as HTML">↧</button><button data-op="png" title="export board as PNG">▣</button><button data-op="del" title="delete (needs 2+ boards)">✕</button></span>` : '');
     t.addEventListener('click', e => {
       const op = e.target.dataset && e.target.dataset.op;
       if (op === 'rename'){ e.stopPropagation(); askRename(bd); return; }
       if (op === 'export'){ e.stopPropagation(); exportBoard(); return; }
+      if (op === 'png'){ e.stopPropagation(); exportPNG(); return; }
       if (op === 'del'){ e.stopPropagation(); askDeleteBoard(bd); return; }
       switchBoard(bd.id);
     });
@@ -778,6 +784,70 @@ function askRename(bd){
 function askDeleteBoard(bd){
   if (!confirm(`Delete board “${bd.title}” and its ${bd.blocks} block(s)?`)) return;
   fetch(`/api/boards/${encodeURIComponent(bd.id)}`, {method:'DELETE'});
+}
+function exportPNG(){
+  // snapshot the whole board to a PNG: clone live cards into an SVG
+  // foreignObject over the dot grid, rasterize at up to 2x, download.
+  // NOTE: the SVG must be drawn from a data: URI — Chromium taints the
+  // canvas when an SVG with <foreignObject> is loaded from a blob: URL.
+  const recs = [...blocks.values()];
+  if (!recs.length){ alert('Nothing to export on this board.'); return; }
+  let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9;
+  const items = recs.map(r => {
+    const p = layout.get(r.meta.id) || {x:0,y:0};
+    const w = r.el.offsetWidth, h = r.el.offsetHeight;
+    x0=Math.min(x0,p.x); y0=Math.min(y0,p.y); x1=Math.max(x1,p.x+w); y1=Math.max(y1,p.y+h);
+    return {r,p,w,h};
+  });
+  const pad = 40;
+  x0-=pad; y0-=pad; x1+=pad; y1+=pad;
+  const W = Math.ceil(x1-x0), H = Math.ceil(y1-y0);
+  const SCALE = Math.max(0.5, Math.min(2, 4096/Math.max(W,H)));
+  const wrap = document.createElement('div');
+  wrap.style.cssText = `position:relative;width:${W}px;height:${H}px;overflow:hidden;`+
+    `font:14px/1.55 -apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,Helvetica,Arial,sans-serif;color:#18181b;`;
+  for (const it of items){
+    const c = it.r.el.cloneNode(true);
+    c.style.transform = 'none';
+    c.style.left = (it.p.x - x0) + 'px';
+    c.style.top = (it.p.y - y0) + 'px';
+    c.style.animation = 'none';
+    c.classList.remove('selected','dragging');
+    wrap.appendChild(c);
+  }
+  // dot grid, aligned to the world coordinates (same 26px pitch as #grid)
+  let dots = '';
+  for (let gx = Math.ceil(x0/GRID)*GRID; gx < x1; gx += GRID)
+    for (let gy = Math.ceil(y0/GRID)*GRID; gy < y1; gy += GRID)
+      dots += `<circle cx="${gx-x0}" cy="${gy-y0}" r="1" fill="#dfe3ea"/>`;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.setAttribute('width', W); svg.setAttribute('height', H);
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.innerHTML = `<style>${document.querySelector('style').textContent}</style>`+
+    `<rect width="${W}" height="${H}" fill="#f6f7f9"/>`+
+    `<g>${dots}</g>`+
+    `<foreignObject width="${W}" height="${H}"></foreignObject>`;
+  svg.querySelector('foreignObject').appendChild(wrap);
+  const str = new XMLSerializer().serializeToString(svg);
+  const img = new Image();
+  img.onload = () => {
+    const cv = document.createElement('canvas');
+    cv.width = Math.ceil(W*SCALE); cv.height = Math.ceil(H*SCALE);
+    const ctx = cv.getContext('2d');
+    ctx.scale(SCALE, SCALE);
+    ctx.drawImage(img, 0, 0);
+    cv.toBlob(b => {
+      if (!b){ alert('PNG export failed.'); return; }
+      const a = document.createElement('a');
+      const slug = (currentBoard||'board').replace(/[^a-z0-9]+/gi,'-').toLowerCase();
+      a.href = URL.createObjectURL(b);
+      a.download = `visor-${slug}-${Date.now()}.png`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+    }, 'image/png');
+  };
+  img.onerror = () => alert('PNG export failed to render. The HTML export (E) always works.');
+  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(str);
 }
 function exportBoard(){
   // snapshot the current board into a single standalone HTML file

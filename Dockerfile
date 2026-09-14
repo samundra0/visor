@@ -4,7 +4,7 @@
 FROM python:3.12-alpine
 WORKDIR /app
 COPY server.py index.html ./
-ENV VISOR_DATA=/data HOLO_PORT=8900
+ENV VISOR_DATA=/data VISOR_PORT=8900
 VOLUME /data
 EXPOSE 8900
 CMD ["python3", "-u", "server.py"]

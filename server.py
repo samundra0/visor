@@ -33,7 +33,7 @@ DATA_DIR = os.environ.get("VISOR_DATA") or os.path.join(ROOT, "data")
 os.makedirs(os.path.join(DATA_DIR, "media"), exist_ok=True)
 STORE = os.path.join(DATA_DIR, "store.json")
 MEDIA_DIR = os.path.join(DATA_DIR, "media")
-PORT = int(os.environ.get("HOLO_PORT", os.environ.get("VISOR_PORT", "8900")))
+PORT = int(os.environ.get("VISOR_PORT", os.environ.get("HOLO_PORT", "8900")))
 
 LOCK = threading.Lock()
 SSE_SUBS = []

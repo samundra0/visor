@@ -39,7 +39,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-PORT = int(os.environ.get("HOLO_PORT", os.environ.get("VISOR_PORT", "8900")))
+PORT = int(os.environ.get("VISOR_PORT", os.environ.get("HOLO_PORT", "8900")))
 BASE = f"http://127.0.0.1:{PORT}"
 
 
