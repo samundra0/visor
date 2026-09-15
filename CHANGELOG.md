@@ -3,6 +3,18 @@
 All notable changes to Visor. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.6] — 2026-09-15
+
+- **SSE dead on load (regression from 1.4.5).** The optional-auth wrapper
+  replaced `window.EventSource` with an arrow function, but the client
+  constructs it with `new EventSource(...)`, and an arrow is not a
+  constructor — so `connect()` threw `TypeError: EventSource is not a
+  constructor` at boot and the page sat at "connecting" forever (initial
+  state rendered, but no live updates, no resync-on-reconnect). CI's
+  `node --check` only validates syntax, so this shipped green. Fixed by
+  making the wrapper a plain function. Caught by a live CDP screenshot —
+  the one thing a syntax lint cannot see.
+
 ## [1.4.5] — 2026-09-15
 
 - **Second self-audit (the surface left after the v1.4.3/4 hardening):**

@@ -29,7 +29,7 @@ HOME = os.environ.get("VISOR_HOME") or os.path.dirname(os.path.dirname(os.path.a
 MEDIA_DIR = os.path.join(HOME, "data", "media")
 TOKEN = os.environ.get("VISOR_TOKEN", "").strip()
 AUTO_START = os.environ.get("VISOR_AUTO_START", "1") != "0"
-SERVER_INFO = {"name": "visor", "version": "1.4.5"}
+SERVER_INFO = {"name": "visor", "version": "1.4.6"}
 PROTOCOL_FALLBACK = "2025-06-18"
 
 BLOCK_TYPES = ["section", "text", "todo", "table", "stat", "chart", "code",

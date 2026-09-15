@@ -224,7 +224,9 @@ window.fetch = (url, opts = {}) => {
   return _fetch(url, opts);
 };
 const _ES = window.EventSource;
-window.EventSource = (url, cfg) => {
+// Must be a real function (not an arrow) — the rest of the client constructs
+// it with `new EventSource(...)`, and an arrow is not a constructor.
+window.EventSource = function (url, cfg) {
   if (!TOKEN) return new _ES(url, cfg);
   // EventSource can't set headers, so the token goes in the query string.
   const u = new URL(String(url), location.href);
