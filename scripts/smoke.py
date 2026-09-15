@@ -91,6 +91,14 @@ lk2 = call("PATCH", f"/api/links/{lid}?board={bq}", {"label": "renamed"})
 stt = call("GET", f"/api/state?board={bq}")
 assert stt["links"][0]["label"] == "renamed", stt
 print("link patch OK")
+# patch validation: out-of-range w must 400, not be stored (parity with POST)
+call_expect(400, "PATCH", f"/api/blocks/{blk}?board={bq}", {"w": 7})
+stt = call("GET", f"/api/state?board={bq}")
+assert stt["blocks"][0]["w"] != 7, stt
+call_expect(200, "PATCH", f"/api/blocks/{blk}?board={bq}", {"w": 2})
+stt = call("GET", f"/api/state?board={bq}")
+assert stt["blocks"][0]["w"] == 2, stt
+print("patch w validation OK")
 call("DELETE", f"/api/blocks/{b2['id']}?board={bq}")
 stt = call("GET", f"/api/state?board={bq}")
 assert stt.get("links", []) == [], stt

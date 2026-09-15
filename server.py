@@ -381,6 +381,8 @@ class Handler(BaseHTTPRequestHandler):
             lid = lm.group(1)
             body = self._body()
             target = self._board_param(body)
+            if target is None:
+                return
             with LOCK:
                 st = load()
                 b = get_board(st, target)
@@ -420,6 +422,18 @@ class Handler(BaseHTTPRequestHandler):
         bid = m.group(1)
         body = self._body()
         target = self._board_param(body)
+        if target is None:
+            return
+        # Validate the same scalars POST does, so an update can't store
+        # out-of-range values (w:7 etc.) that the client renders badly.
+        new = {}
+        for k, (lo, hi) in (("w", (1, 3)), ("x", (-100000, 100000)),
+                            ("y", (-100000, 100000))):
+            if k in body:
+                v = self._num(body[k], lo, hi, k)
+                if v is _NUM_ABORT:
+                    return
+                new[k] = v
         with LOCK:
             st = load()
             b = get_board(st, target)
@@ -430,9 +444,10 @@ class Handler(BaseHTTPRequestHandler):
             if not blk:
                 self._send(404, {"error": "no block"})
                 return
-            for k in ("title", "type", "w", "x", "y", "data"):
+            for k in ("title", "type", "data"):
                 if k in body:
                     blk[k] = body[k]
+            blk.update(new)
             blk["v"] += 1
             blk["ts"] = time.time()
             save(st)
@@ -445,6 +460,8 @@ class Handler(BaseHTTPRequestHandler):
         if lm:
             lid = lm.group(1)
             target = self._board_param()
+            if target is None:
+                return
             with LOCK:
                 st = load()
                 b = get_board(st, target)
@@ -483,6 +500,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         bid = m.group(1)
         target = self._board_param()
+        if target is None:
+            return
         with LOCK:
             st = load()
             b = get_board(st, target)

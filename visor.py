@@ -38,6 +38,7 @@ Links (connectors between blocks):
 """
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -48,15 +49,30 @@ PORT = int(os.environ.get("VISOR_PORT", os.environ.get("HOLO_PORT", "8900")))
 BASE = f"http://127.0.0.1:{PORT}"
 
 
-def post(path, payload=None):
-    data = json.dumps(payload or {}).encode()
+def request(method, path, payload=None):
+    """JSON round-trip. Surfaces the server's error body on 4xx/5xx instead of
+    a raw traceback or a misleading 'not reachable' (HTTPError is a subclass
+    of URLError, so it must be caught FIRST)."""
+    data = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(BASE + path, data=data,
-                                 headers={"Content-Type": "application/json"})
+                                 headers={"Content-Type": "application/json"},
+                                 method=method)
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             return json.loads(r.read() or b"{}")
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        try:
+            msg = json.loads(raw).get("error", raw.decode(errors="replace").strip())
+        except Exception:
+            msg = e.reason
+        sys.exit(f"server {e.code} ({method} {path}): {msg}")
     except urllib.error.URLError as e:
         sys.exit(f"visor server not reachable at {BASE}: {e}")
+
+
+def post(path, payload=None):
+    return request("POST", path, payload)
 
 
 def media_dir():
@@ -66,7 +82,11 @@ def media_dir():
 
 
 def stage(src):
+    """Local file -> copy into data/media and return /media/<name>; URL or
+    /media/ path -> pass through as-is (matches the MCP server's behavior)."""
     import shutil, uuid
+    if re.match(r"^(https?://|/media/)", src):
+        return src
     src = os.path.expanduser(src)
     if not os.path.exists(src):
         sys.exit(f"no such file: {src}")
@@ -100,8 +120,7 @@ def main():
         return post(path, payload)
 
     if cmd == "boards":
-        with urllib.request.urlopen(BASE + "/api/boards", timeout=10) as resp:
-            st = json.loads(resp.read())
+        st = request("GET", "/api/boards")
         for b in st["boards"]:
             mark = "*" if b["id"] == board else " "
             print(f"{mark} {b['id']:20} {b['blocks']:>3} blocks  {b['title']}")
@@ -112,15 +131,10 @@ def main():
             r = post("/api/boards", {"title": r2[0] if r2 else "board"})
             print(f"created board {r['id']!r}")
         elif sub == "rename":
-            req = urllib.request.Request(BASE + f"/api/boards/{urllib.parse.quote(r2[0])}",
-                                         data=json.dumps({"title": r2[1]}).encode(),
-                                         headers={"Content-Type": "application/json"},
-                                         method="PATCH")
-            urllib.request.urlopen(req, timeout=10)
+            request("PATCH", f"/api/boards/{urllib.parse.quote(r2[0])}", {"title": r2[1]})
             print(f"renamed {r2[0]} -> {r2[1]}")
         elif sub == "delete":
-            req = urllib.request.Request(BASE + f"/api/boards/{urllib.parse.quote(r2[0])}", method="DELETE")
-            urllib.request.urlopen(req, timeout=10)
+            request("DELETE", f"/api/boards/{urllib.parse.quote(r2[0])}")
             print(f"deleted {r2[0]}")
         else:
             sys.exit(__doc__)
@@ -200,6 +214,8 @@ def main():
             it = it.strip()
             if not it:
                 continue
+            if ":" not in it:
+                sys.exit(f'audio item needs "label:src", got {it!r}')
             label, src = (x.strip() for x in it.split(":", 1))
             items.append({"label": label, "src": stage(src)})
         bpost(f"/api/blocks{bq}", {"type": "audio", "title": rest[0],
@@ -208,8 +224,7 @@ def main():
         bpost(f"/api/blocks{bq}", {"type": "html", "title": rest[0],
                              "data": {"html": rest[1] if len(rest) > 1 else ""}})
     elif cmd == "list":
-        with urllib.request.urlopen(BASE + f"/api/state{bq}", timeout=10) as r:
-            st = json.loads(r.read())
+        st = request("GET", f"/api/state{bq}")
         for b in st["blocks"]:
             t = b.get("title") or (b.get("data") or {}).get("text", "")[:40]
             print(f"{b['id']}  {b['type']:8}  {b['seq']:>3}  {t}")
@@ -220,12 +235,10 @@ def main():
         r = post(f"/api/links{bq}", {"from": rest[0], "to": rest[1], "label": label})
         print(f"linked {rest[0]} -> {rest[1]}  (link {r['id']})")
     elif cmd == "unlink":
-        req = urllib.request.Request(BASE + f"/api/links/{urllib.parse.quote(rest[0])}{bq}", method="DELETE")
-        urllib.request.urlopen(req, timeout=10)
+        request("DELETE", f"/api/links/{urllib.parse.quote(rest[0])}{bq}")
         print(f"unlinked {rest[0]}")
     elif cmd == "links":
-        with urllib.request.urlopen(BASE + f"/api/state{bq}", timeout=10) as r:
-            st = json.loads(r.read())
+        st = request("GET", f"/api/state{bq}")
         titles = {b["id"]: (b.get("title") or b["type"]) for b in st["blocks"]}
         for l in st.get("links", []):
             print(f"{l['id']}  {l['from']} ({titles.get(l['from'],'?')}) -> {l['to']} ({titles.get(l['to'],'?')})"
@@ -233,8 +246,8 @@ def main():
         if not st.get("links"):
             print("(no links)")
     elif cmd == "rm":
-        req = urllib.request.Request(BASE + f"/api/blocks/{rest[0]}{bq}", method="DELETE")
-        urllib.request.urlopen(req, timeout=10)
+        request("DELETE", f"/api/blocks/{rest[0]}{bq}")
+        print(f"removed {rest[0]}")
     elif cmd == "clear":
         post(f"/api/clear{bq}", {"type": rest[0]} if rest else {})
     else:

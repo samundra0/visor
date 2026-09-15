@@ -3,6 +3,35 @@
 All notable changes to Visor. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.4] — 2026-09-15
+
+- **Follow-up hardening (self-audit of the surface the external review
+  didn't reach — CLI and PATCH path):**
+  - **CLI hid server 4xx/5xx.** `post()` only caught `URLError`, and
+    `HTTPError` is a subclass of it — so the server's helpful error bodies
+    (like the v1.4.3 board-id 400) came out as *"server not reachable"*.
+    A new `request(method, path, payload)` helper catches `HTTPError` first
+    and prints the server's JSON error; every CLI call (boards, board
+    rename/delete, list, links, unlink, rm) now routes through it.
+    Previously `list`/`links` on a missing board dumped a raw Python
+    traceback.
+  - **PATCH accepted what POST rejected.** Updates stored raw `w`/`x`/`y` —
+    `PATCH {"w":7}` persisted `w:7`. Now validated with the same `_num()`
+    as POST (400, not stored); `{"x": null}` still clears a position.
+  - **PATCH/DELETE fell through on a 400'd board id.** `_board_param()` now
+    400s at the edge, but the link-PATCH and both DELETE branches kept
+    going into the lock with `target=None`. All three return early now.
+  - **CLI `image`/`video`/`audio` rejected URLs** (`stage()` demanded a local
+    file) while the MCP server accepted them — same block, different
+    front-ends, inconsistent behavior. URLs and `/media/` paths now pass
+    through. An audio item without `label:src` crashed with a raw
+    `ValueError`; now a clean one-line error.
+  - Smoke suite gained a PATCH `w` validation regression (400 not stored /
+    200 stored).
+- Client re-audited (SSE upsert content/position diff, all `bodyHTML`
+  renderers): no issues found — strict position compare, content diff
+  includes `w`, all user content escaped.
+
 ## [1.4.3] — 2026-09-15
 
 - **Hardening pass from external review.** A third-party review (clone +
