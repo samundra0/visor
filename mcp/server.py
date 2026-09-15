@@ -10,7 +10,7 @@ Point any MCP-capable agent at this file and it gets a `visor_push` tool:
 Env:
   VISOR_URL   base URL (default http://127.0.0.1:8900)
   VISOR_HOME  repo root, for staging local media into <home>/data/media (default: parent of mcp/)
-  VISOR_AUTO_START=0  disable the automatic `docker start visor` on first failure
+  VISOR_AUTO_START=0  disable the automatic `docker start visor` (runs on every tools/call)
 """
 import json
 import os
@@ -27,7 +27,7 @@ BASE = os.environ.get("VISOR_URL", "http://127.0.0.1:8900").rstrip("/")
 HOME = os.environ.get("VISOR_HOME") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MEDIA_DIR = os.path.join(HOME, "data", "media")
 AUTO_START = os.environ.get("VISOR_AUTO_START", "1") != "0"
-SERVER_INFO = {"name": "visor", "version": "1.4.1"}
+SERVER_INFO = {"name": "visor", "version": "1.4.3"}
 PROTOCOL_FALLBACK = "2025-06-18"
 
 BLOCK_TYPES = ["section", "text", "todo", "table", "stat", "chart", "code",
@@ -214,6 +214,10 @@ def tool_boards(args):
 
 
 def call_tool(name, args):
+    # Best-effort reachability: auto-start the container if it's down (like the
+    # Hermes plugin). A live server raises no exception; VISOR_AUTO_START=0
+    # still short-circuits via ensure_server.
+    ensure_server()
     if name == "visor_push":
         return tool_push(args)
     if name == "visor_boards":
@@ -249,7 +253,7 @@ def handle(req):
         return {"prompts": []}
     if rid is None:
         return None  # unknown notification
-    return None, {"code": -32601, "message": f"method not found: {method}"}
+    return rid, {"code": -32601, "message": f"method not found: {method}"}
 
 
 def main():

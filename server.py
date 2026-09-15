@@ -142,6 +142,9 @@ def board_list(st):
             for bid in st["order"]]
 
 
+_NUM_ABORT = object()
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -169,7 +172,31 @@ class Handler(BaseHTTPRequestHandler):
         bid = (q.get("board") or [None])[0]
         if not bid and body:
             bid = body.get("board")
-        return (bid or DEFAULT_BOARD).strip() or DEFAULT_BOARD
+        bid = (bid or DEFAULT_BOARD).strip() or DEFAULT_BOARD
+        # Validate at the API edge: an id that can't be read back would create
+        # an orphaned board (push succeeds, /api/state 404s, no delete path).
+        if not BOARD_RE.match(bid):
+            self._send(400, {"error": f"bad board id {bid!r} "
+                                      "(want ^[a-z0-9][a-z0-9_-]{0,63}$)"})
+            return None
+        return bid
+
+    def _num(self, v, lo, hi, field, default=None):
+        """Coerce a client-supplied number to an int in [lo, hi].
+        Missing (None) -> default. Bad type or range -> 400 sent + _NUM_ABORT
+        (callers must check with `is _NUM_ABORT` — a plain None can be a valid
+        stored value, e.g. an unset x/y)."""
+        if v is None:
+            return default
+        try:
+            n = int(v)
+        except (TypeError, ValueError):
+            self._send(400, {"error": f"{field} must be an integer, got {v!r}"})
+            return _NUM_ABORT
+        if not lo <= n <= hi:
+            self._send(400, {"error": f"{field} must be {lo}..{hi}, got {n}"})
+            return _NUM_ABORT
+        return n
 
     def do_GET(self):
         u = urlparse(self.path)
@@ -178,6 +205,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, f.read(), "text/html; charset=utf-8")
         elif u.path == "/api/state":
             bid = self._board_param()
+            if bid is None:
+                return
             with LOCK:
                 st = load()
                 b = get_board(st, bid)
@@ -226,7 +255,18 @@ class Handler(BaseHTTPRequestHandler):
         body = self._body()
         if u.path == "/api/blocks":
             bid = self._board_param(body)
+            if bid is None:
+                return
             focus = bool(body.get("focus"))
+            w = self._num(body.get("w", 1), 1, 3, "w", default=1)
+            if w is _NUM_ABORT:
+                return
+            x = self._num(body.get("x"), -100000, 100000, "x")
+            if x is _NUM_ABORT:
+                return
+            y = self._num(body.get("y"), -100000, 100000, "y")
+            if y is _NUM_ABORT:
+                return
             with LOCK:
                 st = load()
                 b = ensure_board(st, bid, body.get("title", ""))
@@ -236,9 +276,9 @@ class Handler(BaseHTTPRequestHandler):
                     "type": body.get("type", "text"),
                     "title": body.get("title", ""),
                     "seq": b["seq"],
-                    "x": body.get("x"),
-                    "y": body.get("y"),
-                    "w": max(1, min(3, int(body.get("w", 1)))),
+                    "x": x,
+                    "y": y,
+                    "w": w,
                     "data": body.get("data", {}),
                     "v": 1,
                     "ts": time.time(),
@@ -252,6 +292,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, blk)
         elif u.path == "/api/clear":
             bid = self._board_param(body)
+            if bid is None:
+                return
             with LOCK:
                 st = load()
                 b = ensure_board(st, bid)
@@ -271,6 +313,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True})
         elif u.path == "/api/meta":
             bid = self._board_param(body)
+            if bid is None:
+                return
             with LOCK:
                 st = load()
                 b = ensure_board(st, bid, body.get("title", ""))
@@ -298,6 +342,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, created)
         elif u.path == "/api/links":
             bid = self._board_param(body)
+            if bid is None:
+                return
             src, dst = str(body.get("from") or ""), str(body.get("to") or "")
             label = str(body.get("label") or "")
             with LOCK:

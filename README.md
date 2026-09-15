@@ -90,8 +90,9 @@ python3 visor.py list
 
 **MCP (Claude Code, OpenCode, Codex, Antigravity — anything MCP-capable):**
 zero-dependency MCP server included (`mcp/server.py`, Python stdlib only).
-It exposes `visor_push` + `visor_boards` as first-class tools and
-auto-starts the container if it's down:
+It exposes `visor_push` + `visor_boards` as first-class tools and, on any
+tool call, auto-starts the Docker container if it's down
+(`VISOR_AUTO_START=0` disables):
 
 ```sh
 # Claude Code
@@ -210,9 +211,14 @@ Rebuild after changes: `docker compose build -q && docker compose up -d`.
 (If the container already exists, `docker compose up -d` won't pick up the
 new image — `docker rm -f visor` first, then up.)
 
-Lint the client JS before rebuilding: extract the `<script>` and `node --check`
-it — a single syntax error silently kills the whole page (the script is one
-blob).
+CI lints the client JS automatically (extracts the `<script>` blob and
+checks it — a single syntax error silently kills the whole page). Same
+check locally if you want it before a rebuild:
+
+```sh
+node -e 'const h=require("fs").readFileSync("index.html","utf8");
+new Function(h.match(/<script>([\s\S]*)<\/script>/)[1]);console.log("ok")'
+```
 
 Test: `python3 scripts/smoke.py` (server must be running) — boards, blocks,
 links CRUD, error codes, SSE, media, exports. Same suite runs in CI.
@@ -224,7 +230,7 @@ Environment:
 | `VISOR_DATA` | `./data` (host) / `/data` (container) | store + media dir |
 | `VISOR_PORT` | `8900` | listen port (`HOLO_PORT` accepted as legacy alias) |
 | `VISOR_USER` | `1000:1000` | uid:gid the container runs as (compose) — set this to your own uid:gid if your files aren't owned by 1000 (check with `id -u`/`id -g`), otherwise the server can't write `data/` |
-| `VISOR_HOME` | `~/code/visor` | project root for the Hermes plugin |
+| `VISOR_HOME` | repo root (parent of `mcp/`) | project root for the Hermes plugin + media staging |
 
 ## Design notes & honest limits
 

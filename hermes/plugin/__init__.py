@@ -163,7 +163,7 @@ def _docker_up() -> bool:
         r = subprocess.run(["docker", "ps", "-a", "--filter", "name=^visor$",
                             "--format", "{{.Names}}"],
                            capture_output=True, text=True, timeout=10)
-        return r.returncode == 0 and r.stdout.strip()
+        return r.returncode == 0 and bool(r.stdout.strip())
     except Exception:
         return False
 

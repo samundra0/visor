@@ -11,6 +11,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Syntax checks
+        run: |
+          python3 -m py_compile server.py visor.py mcp/server.py scripts/smoke.py
+          # the client is one big <script> blob — a single syntax error kills
+          # the whole page, so lint it here instead of by hand
+          node -e "
+            const fs = require('fs');
+            const html = fs.readFileSync('index.html', 'utf8');
+            const m = html.match(/<script>([\s\S]*)<\/script>/);
+            if (!m) { console.error('no <script> found in index.html'); process.exit(1); }
+            new Function(m[1]);
+            console.log('index.html script: syntax OK (' + m[1].split('\n').length + ' lines)');
+          "
+
       - name: Build container
         run: docker compose build -q
 

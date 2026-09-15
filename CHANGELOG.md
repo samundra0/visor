@@ -3,6 +3,52 @@
 All notable changes to Visor. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.3] — 2026-09-15
+
+- **Hardening pass from external review.** A third-party review (clone +
+  local run of server and MCP) verified six concrete bugs, all fixed here:
+  - **Invalid board ids created orphaned boards.** `ensure_board()`
+    auto-created a board for any id, even ones `get_board()`'s regex rejects
+    — so `POST /api/blocks?board=BAD!!ID` succeeded, `/api/state` then 404'd,
+    and the board was unreadable and undeletable. Board ids are now
+    validated at the API edge in `_board_param()` (400 with a hint).
+  - **Malformed `w`/`x`/`y` reset the connection.** `int(dict)` raised
+    `TypeError` in the handler → silent connection reset (curl 000). Now a
+    clean 400 with the offending value in the message (`_num()`). Caught
+    during this pass: `_num()` must signal "400 sent" with a sentinel
+    (`_NUM_ABORT`), not `None` — a missing `x`/`y` legitimately stores `None`,
+    and conflating the two made *every* push without coordinates silently die.
+  - **MCP error responses lost the request id.** `method not found` returned
+    `id: null`, which strict JSON-RPC clients can't correlate — now echoes
+    the request id.
+  - **MCP `ensure_server()` was dead code** while the README claimed
+    auto-start. Now called at the top of every `tools/call` (like the Hermes
+    plugin); `VISOR_AUTO_START=0` still disables it, and the README/docs
+    state the real behavior.
+  - **Smoke test asserted nothing on its error cases.**
+    `call_expect(code, ...)` ignored `code` and callers discarded the
+    returned status — the advertised 409/400/404 coverage was a no-op that
+    always passed. It now asserts the exact status, and the suite gained
+    regressions for the two server bugs above (bad board id must 400 and not
+    persist; malformed `w` must 400, not reset).
+  - **`javascript:` URLs passed the markdown renderer.** The link rule had no
+    scheme filter, so agent-pushed `[x](javascript:...)` rendered as a live
+    link — a real issue for scraped/researched content. Now an allowlist
+    (`https?:`, `mailto:`, `/`, `#`); anything else renders as plain text,
+    and links get `rel="noopener noreferrer"`.
+- **CI lints the client JS** (extracts the `<script>` blob, checks syntax)
+  and compiles the Python files — the "extract and `node --check` by hand"
+  step from the README is now automated.
+- **`_docker_up()` returned a string** instead of the bool its annotation
+  promised — now an explicit `bool()`.
+- **README accuracy:** the `VISOR_HOME` default was documented as
+  `~/code/visor`; it actually defaults to the repo root (parent of `mcp/`).
+- Review observations intentionally **not** changed this round (documented
+  trade-offs, not bugs): SSE queues unbounded (fine at stated scale),
+  whole-store read/write per request (acknowledged in design notes), compose
+  publishing `0.0.0.0` (opt-in for LAN is the user's call), `fsync` before
+  `os.replace` (power-loss, not crash, protection).
+
 ## [1.4.2] — 2026-09-14
 
 - **Docs synced to the shipped state.** CHANGELOG was missing the 1.4.1

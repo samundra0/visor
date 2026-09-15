@@ -51,14 +51,29 @@ s.close()
 # links: create between two blocks, verify state, errors, prune
 import urllib.error
 def call_expect(code, method, path, obj=None):
+    """Call and assert the exact status code (a smoke test that can't fail
+    on its error cases proves nothing)."""
     data = json.dumps(obj).encode() if obj is not None else None
     req = urllib.request.Request(BASE + path, data=data,
         headers={"Content-Type": "application/json"} if data else {}, method=method)
     try:
         with urllib.request.urlopen(req) as r:
-            return r.status, json.loads(r.read() or b"{}")
+            st = r.status
     except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read() or b"{}")
+        st = e.code
+    assert st == code, f"{method} {path} -> {st}, expected {code}"
+    return st
+
+# --- input validation (regressions: orphan boards + connection reset) ---
+st = call_expect(400, "POST", "/api/blocks?board=BAD!!ID",
+                 {"type": "text", "title": "orphan?", "data": {"text": "x"}})
+blist = call("GET", "/api/boards")
+assert not any(b["id"] == "BAD!!ID" for b in blist["boards"]), \
+    f"malformed board persisted: {blist}"
+print("bad board id rejected, not persisted OK")
+st = call_expect(400, "POST", f"/api/blocks?board={bq}",
+                 {"type": "text", "title": "w?", "w": {"a": 1}})
+print("malformed w rejected (400, not reset) OK")
 
 b2 = call("POST", f"/api/blocks?board={bq}",
           {"type": "text", "title": "b2", "data": {"text": "x"}})
@@ -68,9 +83,9 @@ lid = lk["id"]
 stt = call("GET", f"/api/state?board={bq}")
 assert any(l["id"] == lid for l in stt.get("links", [])), stt
 print("link create + state OK")
-st, _ = call_expect(409, "POST", f"/api/links?board={bq}", {"from": blk, "to": b2["id"]})
-st, _ = call_expect(400, "POST", f"/api/links?board={bq}", {"from": blk, "to": blk})
-st, _ = call_expect(404, "POST", f"/api/links?board={bq}", {"from": blk, "to": "nope"})
+call_expect(409, "POST", f"/api/links?board={bq}", {"from": blk, "to": b2["id"]})
+call_expect(400, "POST", f"/api/links?board={bq}", {"from": blk, "to": blk})
+call_expect(404, "POST", f"/api/links?board={bq}", {"from": blk, "to": "nope"})
 print("link errors (409/400/404) OK")
 lk2 = call("PATCH", f"/api/links/{lid}?board={bq}", {"label": "renamed"})
 stt = call("GET", f"/api/state?board={bq}")
