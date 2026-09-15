@@ -48,6 +48,24 @@ assert "event:" in data or "200" in data, data[:100]
 print("sse OK")
 s.close()
 
+# health endpoint (open, used by the compose healthcheck)
+with urllib.request.urlopen(BASE + "/api/health") as r:
+    h = json.loads(r.read())
+assert h.get("ok") is True, h
+print("health OK")
+
+# malformed JSON body must 400, not create an empty block with 200
+import urllib.error
+req = urllib.request.Request(BASE + f"/api/blocks?board={bq}", data=b"not json",
+    headers={"Content-Type": "application/json"}, method="POST")
+try:
+    with urllib.request.urlopen(req) as r:
+        code = r.status
+except urllib.error.HTTPError as e:
+    code = e.code
+assert code == 400, f"malformed JSON body -> {code}, expected 400"
+print("malformed JSON rejected (400) OK")
+
 # links: create between two blocks, verify state, errors, prune
 import urllib.error
 def call_expect(code, method, path, obj=None):

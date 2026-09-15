@@ -10,6 +10,7 @@ Point any MCP-capable agent at this file and it gets a `visor_push` tool:
 Env:
   VISOR_URL   base URL (default http://127.0.0.1:8900)
   VISOR_HOME  repo root, for staging local media into <home>/data/media (default: parent of mcp/)
+  VISOR_TOKEN bearer token for an authenticated visor (matches the server's VISOR_TOKEN)
   VISOR_AUTO_START=0  disable the automatic `docker start visor` (runs on every tools/call)
 """
 import json
@@ -26,8 +27,9 @@ import uuid
 BASE = os.environ.get("VISOR_URL", "http://127.0.0.1:8900").rstrip("/")
 HOME = os.environ.get("VISOR_HOME") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MEDIA_DIR = os.path.join(HOME, "data", "media")
+TOKEN = os.environ.get("VISOR_TOKEN", "").strip()
 AUTO_START = os.environ.get("VISOR_AUTO_START", "1") != "0"
-SERVER_INFO = {"name": "visor", "version": "1.4.4"}
+SERVER_INFO = {"name": "visor", "version": "1.4.5"}
 PROTOCOL_FALLBACK = "2025-06-18"
 
 BLOCK_TYPES = ["section", "text", "todo", "table", "stat", "chart", "code",
@@ -114,8 +116,11 @@ TOOL_BOARDS = {
 
 def _http(method, path, body=None):
     data = json.dumps(body).encode() if body is not None else None
+    headers = {"Content-Type": "application/json"}
+    if TOKEN:
+        headers["Authorization"] = f"Bearer {TOKEN}"
     req = urllib.request.Request(BASE + path, data=data,
-                                 headers={"Content-Type": "application/json"}, method=method)
+                                 headers=headers, method=method)
     with urllib.request.urlopen(req, timeout=8) as r:
         return json.loads(r.read() or b"{}")
 

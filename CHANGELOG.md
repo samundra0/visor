@@ -3,6 +3,40 @@
 All notable changes to Visor. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.4.5] — 2026-09-15
+
+- **Second self-audit (the surface left after the v1.4.3/4 hardening):**
+  - **Malformed JSON body → silent 200.** `_body()` swallowed parse errors
+    and returned `{}`, so `POST /api/blocks` with a broken body created an
+    empty block and answered 200. Now 400 (`body is not valid JSON`), 413
+    over 10MB, 400 if the top level isn't an object. Empty body (no
+    Content-Length) still means "no body" → `{}`.
+  - **No CORS preflight.** Browsers cross-origin writes died with 501
+    (`BaseHTTPRequestHandler` has no `do_OPTIONS`). Added one, answering with
+    the standard `Access-Control-Allow-*` headers (204).
+  - **Empty board title stored as `''`.** `/api/meta` and board-rename
+    accepted a blank title (the tab then showed the id fallback). Both now
+    fall back to the board id, matching `POST /api/boards`.
+- **Optional bearer auth (`VISOR_TOKEN`).** When set, `/api/*` and `/media/*`
+  require `Authorization: Bearer <token>` (or `?token=*** for the SSE
+  stream, which can't set headers). `/`, the page, and `/api/health` stay
+  open. Unset = open, the default. The CLI, MCP server, and Hermes plugin all
+  read the same env var and send the header; the web UI reads it from
+  `?token=*** in the URL. This is the change that lets visor run on a
+  public VPS instead of just LAN.
+- **`GET /api/health`** — a stable, minimal, auth-free readiness endpoint for
+  the compose healthcheck and for agents to probe, instead of everyone
+  polling `/api/boards` and parsing the full list. The Hermes plugin's
+  liveness probe now uses it (it used `/api/state`, which is auth-gated now).
+- **Compose healthcheck** — `docker ps` now reports healthy/unhealthy (the
+  server is the container, so a live server = healthy).
+- **Smoke suite** gained a health check and a malformed-JSON-body 400
+  regression.
+- README: `VISOR_TOKEN` in the env table; "Design notes" now documents the
+  optional auth and the deliberate permissive block-`type` behavior (an
+  unknown type stores fine and renders as pretty-printed JSON — forward
+  compat for new block types).
+
 ## [1.4.4] — 2026-09-15
 
 - **Follow-up hardening (self-audit of the surface the external review

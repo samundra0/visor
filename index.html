@@ -210,6 +210,28 @@ pre.code .lang{display:block;font-size:9.5px;font-weight:700;letter-spacing:.12e
 <script>
 "use strict";
 const world = document.getElementById('world');
+
+/* Optional auth (matches the server's VISOR_TOKEN): open the page with
+   ?token=<value> — the token is then sent on every API call (fetch + SSE)
+   via the Authorization header. Without it, an authenticated server 401s. */
+const TOKEN = (() => {
+  try { return new URLSearchParams(location.search).get('token') || ''; } catch { return ''; }
+})();
+const _fetch = window.fetch.bind(window);
+window.fetch = (url, opts = {}) => {
+  opts.headers = { ...(opts.headers || {}) };
+  if (TOKEN) opts.headers['Authorization'] = 'Bearer ' + TOKEN;
+  return _fetch(url, opts);
+};
+const _ES = window.EventSource;
+window.EventSource = (url, cfg) => {
+  if (!TOKEN) return new _ES(url, cfg);
+  // EventSource can't set headers, so the token goes in the query string.
+  const u = new URL(String(url), location.href);
+  u.searchParams.set('token', TOKEN);
+  return new _ES(u.toString(), cfg);
+};
+
 const COL_W = 380, COLS = 3, PAD = 24;
 const DEFAULT_BOARD = 'main';
 let view = {x: 60, y: 60, s: 1};

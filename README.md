@@ -232,6 +232,7 @@ Environment:
 | `VISOR_PORT` | `8900` | listen port (`HOLO_PORT` accepted as legacy alias) |
 | `VISOR_USER` | `1000:1000` | uid:gid the container runs as (compose) — set this to your own uid:gid if your files aren't owned by 1000 (check with `id -u`/`id -g`), otherwise the server can't write `data/` |
 | `VISOR_HOME` | repo root (parent of `mcp/`) | project root for the Hermes plugin + media staging |
+| `VISOR_TOKEN` | _(unset = open)_ | optional bearer token. When set, `/api/*` and `/media/*` require `Authorization: Bearer <token>`. Open the UI with `?token=*** (EventSource can't set headers). The CLI, MCP server, and Hermes plugin all read the same var. `/`, the page, and `/api/health` stay open. |
 
 ## Design notes & honest limits
 
@@ -243,9 +244,13 @@ Environment:
   (this was a real bug that made dragging feel jumpy — see the client's SSE
   diff: content change → rebuild that card; position change → move it;
   otherwise no-op).
-- **Single user, one process.** No auth (it's for localhost/LAN). One store
-  file, written atomically under a lock. Concurrency beyond a few clients is
-  not the design goal.
+- **Single user, one process.** One store file, written atomically under a
+  lock. Concurrency beyond a few clients is not the design goal. **Optional
+  bearer auth** (`VISOR_TOKEN`) lets you run it on a public VPS instead of
+  LAN; unset = open, the default for localhost.
+- **The server accepts any block `type`.** The *clients* define the renderers
+  (MCP validates the known set); an unknown type stores fine and renders as
+  pretty-printed JSON on the canvas — forward-compatible with new block types.
 - **Media is copied, not streamed from your paths.** The plugin/CLI stage files
   into `data/media/` (the page can't read arbitrary local paths). URLs pass
   through untouched.

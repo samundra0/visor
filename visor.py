@@ -47,6 +47,9 @@ import urllib.request
 
 PORT = int(os.environ.get("VISOR_PORT", os.environ.get("HOLO_PORT", "8900")))
 BASE = f"http://127.0.0.1:{PORT}"
+# Match the server's VISOR_TOKEN (if set) so the CLI works against an
+# authenticated visor.
+TOKEN = os.environ.get("VISOR_TOKEN", "").strip()
 
 
 def request(method, path, payload=None):
@@ -54,9 +57,11 @@ def request(method, path, payload=None):
     a raw traceback or a misleading 'not reachable' (HTTPError is a subclass
     of URLError, so it must be caught FIRST)."""
     data = json.dumps(payload).encode() if payload is not None else None
+    headers = {"Content-Type": "application/json"}
+    if TOKEN:
+        headers["Authorization"] = f"Bearer {TOKEN}"
     req = urllib.request.Request(BASE + path, data=data,
-                                 headers={"Content-Type": "application/json"},
-                                 method=method)
+                                 headers=headers, method=method)
     try:
         with urllib.request.urlopen(req, timeout=10) as r:
             return json.loads(r.read() or b"{}")

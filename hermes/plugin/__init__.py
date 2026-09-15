@@ -29,6 +29,9 @@ ROOT = Path(os.environ.get("VISOR_HOME") or (Path.home() / "code" / "visor"))
 PORT = int(os.environ.get("VISOR_PORT", "8900"))
 BASE = f"http://127.0.0.1:{PORT}"
 _PUBLIC = f"http://localhost:{PORT}"
+# Match the server's VISOR_TOKEN (if set) so the plugin works against an
+# authenticated visor.
+TOKEN = os.environ.get("VISOR_TOKEN", "").strip()
 MEDIA = ROOT / "data" / "media"
 SERVER = ROOT / "server.py"
 COMPOSE = ROOT / "docker-compose.yml"
@@ -132,9 +135,12 @@ VISOR_PUSH_SCHEMA: Dict[str, Any] = {
 def _http(method: str, path: str, payload: Optional[Dict[str, Any]] = None,
           timeout: float = 10.0) -> Dict[str, Any]:
     data = json.dumps(payload or {}).encode()
+    headers = {"Content-Type": "application/json"}
+    if TOKEN:
+        headers["Authorization"] = f"Bearer {TOKEN}"
     req = urllib.request.Request(
         BASE + path, data=data if method in ("POST", "PATCH") else None,
-        headers={"Content-Type": "application/json"}, method=method,
+        headers=headers, method=method,
     )
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read() or b"{}")
@@ -142,7 +148,9 @@ def _http(method: str, path: str, payload: Optional[Dict[str, Any]] = None,
 
 def _reachable() -> bool:
     try:
-        with urllib.request.urlopen(BASE + "/api/state", timeout=2.0) as r:
+        # /api/health is open even when VISOR_TOKEN is set, so this is a
+        # reliable liveness probe in both modes.
+        with urllib.request.urlopen(BASE + "/api/health", timeout=2.0) as r:
             return r.status == 200
     except Exception:
         return False

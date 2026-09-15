@@ -13,6 +13,16 @@ services:
     environment:
       - VISOR_DATA=/data
       - VISOR_PORT=8900
+      # Optional bearer auth: set VISOR_TOKEN to gate /api/* and /media/*.
+      # Leave unset for localhost/LAN open mode. The web UI reads it from
+      # ?token=*** in the URL (EventSource can't set headers).
+      - VISOR_TOKEN=${VISOR_TOKEN:-}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8900/api/health', timeout=2).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
     # Keep the container alive while the server crash-loops at startup (e.g.
     # the data volume is root-owned and unreadable by the container user) so
     # `docker logs` shows the real traceback instead of an unexplained

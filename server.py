@@ -38,6 +38,9 @@ os.makedirs(os.path.join(DATA_DIR, "media"), exist_ok=True)
 STORE = os.path.join(DATA_DIR, "store.json")
 MEDIA_DIR = os.path.join(DATA_DIR, "media")
 PORT = int(os.environ.get("VISOR_PORT", os.environ.get("HOLO_PORT", "8900")))
+# Optional bearer auth: set VISOR_TOKEN to require `Authorization: Bearer <token>`
+# on all /api/* and /media/* requests. Unset = open (localhost/LAN use).
+TOKEN = os.environ.get("VISOR_TOKEN", "").strip()
 
 LOCK = threading.Lock()
 SSE_SUBS = []
@@ -143,6 +146,8 @@ def board_list(st):
 
 
 _NUM_ABORT = object()
+_BODY_ABORT = object()
+MAX_BODY = 10 * 1024 * 1024  # 10MB — a client shouldn't POST more than this
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -159,13 +164,67 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def _body(self):
-        n = int(self.headers.get("Content-Length", 0) or 0)
-        if not n:
-            return {}
+        """Parse a JSON request body. Returns {} for an empty body (most
+        mutations are optional), and _BODY_ABORT (with 400/413 already sent)
+        for malformed or oversized bodies — callers must `is _BODY_ABORT`.
+        (Old code returned {} for malformed JSON, so a POST with a broken
+        body silently created an empty block with HTTP 200.)"""
         try:
-            return json.loads(self.rfile.read(n) or b"{}")
-        except Exception:
+            n = int(self.headers.get("Content-Length", 0) or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if n <= 0:
             return {}
+        if n > MAX_BODY:
+            self._send(413, {"error": f"body too large ({n} bytes > {MAX_BODY})"})
+            return _BODY_ABORT
+        raw = self.rfile.read(n)
+        try:
+            parsed = json.loads(raw or b"{}")
+        except Exception:
+            self._send(400, {"error": "body is not valid JSON"})
+            return _BODY_ABORT
+        if not isinstance(parsed, dict):
+            self._send(400, {"error": "body must be a JSON object"})
+            return _BODY_ABORT
+        return parsed
+
+    def _authed(self):
+        """Optional bearer auth (VISOR_TOKEN). Always True when unset. /api/*
+        and /media/* are gated; /, /index.html and /api/health are open so the
+        page loads and healthchecks pass. Accepted via `Authorization: Bearer
+        <t>` header OR a `?token=*** query param (EventSource can't set
+        headers, so the SSE stream uses the query)."""
+        if not TOKEN:
+            return True
+        got = (self.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
+        if got == TOKEN:
+            return True
+        q = parse_qs(urlparse(self.path).query)
+        return (q.get("token") or [""])[0] == TOKEN
+
+    def _need_auth(self):
+        """Gate for /api/* and /media/*. Returns True (and has sent 401) when
+        the request should stop here. Only meaningful when VISOR_TOKEN is set."""
+        if self._authed():
+            return False
+        self._send(401, {"error": "unauthorized (set Authorization: Bearer <VISOR_TOKEN>)"})
+        return True
+
+    def do_OPTIONS(self):
+        # CORS preflight. Without this a browser cross-origin write dies with
+        # 501 (BaseHTTPRequestHandler has no default). Responses already carry
+        # Access-Control-Allow-Origin: *, so answering preflight lets same-origin
+        # and explicitly-permitted origins actually write.
+        origin = self.headers.get("Origin", "")
+        self.send_response(204)
+        self.send_header("Access-Control-Allow-Origin", origin or "*")
+        self.send_header("Access-Control-Allow-Methods",
+                         "GET, POST, PATCH, DELETE, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers",
+                         "Content-Type, Authorization")
+        self.send_header("Access-Control-Max-Age", "86400")
+        self.end_headers()
 
     def _board_param(self, body=None):
         q = parse_qs(urlparse(self.path).query)
@@ -203,6 +262,12 @@ class Handler(BaseHTTPRequestHandler):
         if u.path in ("/", "/index.html"):
             with open(os.path.join(ROOT, "index.html"), "rb") as f:
                 self._send(200, f.read(), "text/html; charset=utf-8")
+        elif u.path == "/api/health":
+            # Open (no auth) so compose healthchecks and agents can probe
+            # readiness without a token or parsing the board list.
+            self._send(200, {"ok": True, "auth": bool(TOKEN)})
+        elif self._need_auth():
+            return
         elif u.path == "/api/state":
             bid = self._board_param()
             if bid is None:
@@ -252,7 +317,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         u = urlparse(self.path)
+        if self._need_auth():
+            return
         body = self._body()
+        if body is _BODY_ABORT:
+            return
         if u.path == "/api/blocks":
             bid = self._board_param(body)
             if bid is None:
@@ -319,7 +388,9 @@ class Handler(BaseHTTPRequestHandler):
                 st = load()
                 b = ensure_board(st, bid, body.get("title", ""))
                 if "title" in body:
-                    b["title"] = body["title"]
+                    # empty/whitespace title -> fall back to the board id
+                    # (parity with POST /api/boards; otherwise the tab shows blank)
+                    b["title"] = str(body["title"]).strip() or bid
                 save(st)
                 broadcast({"op": "boards"})
                 broadcast({"op": "meta", "board": bid,
@@ -376,10 +447,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PATCH(self):
         u = urlparse(self.path)
+        if self._need_auth():
+            return
         lm = re.match(r"^/api/links/([\w-]+)$", u.path)
         if lm:
             lid = lm.group(1)
             body = self._body()
+            if body is _BODY_ABORT:
+                return
             target = self._board_param(body)
             if target is None:
                 return
@@ -405,6 +480,8 @@ class Handler(BaseHTTPRequestHandler):
             if bm:
                 bid = bm.group(1)
                 body = self._body()
+                if body is _BODY_ABORT:
+                    return
                 with LOCK:
                     st = load()
                     b = get_board(st, bid)
@@ -412,7 +489,7 @@ class Handler(BaseHTTPRequestHandler):
                         self._send(404, {"error": "no board"})
                         return
                     if "title" in body:
-                        b["title"] = str(body["title"])
+                        b["title"] = str(body["title"]).strip() or bid
                     save(st)
                     broadcast({"op": "boards", "board": bid})
                     self._send(200, {"id": bid, "title": b["title"]})
@@ -421,6 +498,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         bid = m.group(1)
         body = self._body()
+        if body is _BODY_ABORT:
+            return
         target = self._board_param(body)
         if target is None:
             return
@@ -456,6 +535,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         u = urlparse(self.path)
+        if self._need_auth():
+            return
         lm = re.match(r"^/api/links/([\w-]+)$", u.path)
         if lm:
             lid = lm.group(1)
