@@ -1,6 +1,6 @@
 # v1.4 — Connectors between blocks
 
-Date: 2026-09-14 · Status: approved (user: "both modes — API + interactive")
+Date: 2026-09-14 · Status: shipped (v1.4.0) · Two creation modes: API + interactive
 
 ## Problem
 
@@ -137,14 +137,14 @@ cards move" without camera movement (the camera is never touched).
 
 ## Testing / verification
 
-1. `node --check` the extracted `<script>` before rebuild (per skill).
+1. Lint the extracted client `<script>` (now automated in CI).
 2. Rebuild container; run `python3 scripts/smoke.py` — extended with:
    - create board + 2 blocks → `POST /api/links` → state shows link
    - duplicate → 409; self-link → 400; unknown block → 404
    - `PATCH` label → state shows new label
    - delete block → link pruned; `DELETE /api/links/<id>` → gone
    - clear board → links gone
-3. Real-browser CDP verification on :9223 (per skill):
+3. Real-browser verification (Playwright/CDP):
    - API-created link renders (vision: curve + arrow between the two cards)
    - drag a card → `drawLinks` updates (assert path `d` changed, camera
      byte-identical before/after)
@@ -163,5 +163,4 @@ cards move" without camera movement (the camera is never touched).
 
 `server.py`, `index.html`, `visor.py`, `hermes/plugin/__init__.py`,
 `mcp/server.py`, `scripts/smoke.py`, `README.md`, `docs/agent-setup.md`,
-`CHANGELOG.md`, `~/.hermes/skills/visor/SKILL.md`, `~/.hermes/plugins/visor/`
-(plugin copy sync).
+`CHANGELOG.md`.

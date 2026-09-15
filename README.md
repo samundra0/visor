@@ -200,6 +200,7 @@ Dockerfile       python:3.12-alpine, stateless (state in ./data volume)
 docker-compose.yml  restart: unless-stopped; VISOR_USER env for your uid:gid
 hermes/          Hermes plugin (visor_push tool, incl. links) + install.sh
 docs/agent-setup.md  the prompt to give any agent
+docs/design/         historical design notes (e.g. the v1.4 connectors spec)
 scripts/smoke.py end-to-end smoke test against a running :8900
 .github/workflows/ci.yaml  builds the image and runs the smoke test on every push
 data/.gitkeep    keeps the bind-mount dir in the repo so a fresh clone
