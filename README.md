@@ -233,6 +233,7 @@ Environment:
 | `VISOR_USER` | `1000:1000` | uid:gid the container runs as (compose) — set this to your own uid:gid if your files aren't owned by 1000 (check with `id -u`/`id -g`), otherwise the server can't write `data/` |
 | `VISOR_HOME` | repo root (parent of `mcp/`) | project root for the Hermes plugin + media staging |
 | `VISOR_TOKEN` | _(unset = open)_ | optional bearer token. When set, `/api/*` and `/media/*` require `Authorization: Bearer <token>`. Open the UI with `?token=*** (EventSource can't set headers). The CLI, MCP server, and Hermes plugin all read the same var. `/`, the page, and `/api/health` stay open. |
+| `VISOR_MODULES` | _(empty = core only)_ | optional module plugins (v1.5): comma list from `plugins/`, e.g. `selftest`. A module adds block types, card renderers, `/api/plugins/<name>/*` endpoints, and may transform pushes before storage. Missing/crashing modules are logged and skipped — core still boots. See `docs/design/plugins-v1.5.md`. |
 
 ## Design notes & honest limits
 
@@ -248,9 +249,11 @@ Environment:
   lock. Concurrency beyond a few clients is not the design goal. **Optional
   bearer auth** (`VISOR_TOKEN`) lets you run it on a public VPS instead of
   LAN; unset = open, the default for localhost.
-- **The server accepts any block `type`.** The *clients* define the renderers
-  (MCP validates the known set); an unknown type stores fine and renders as
-  pretty-printed JSON on the canvas — forward-compatible with new block types.
+- **Block types are a closed set.** Core accepts `section, text, todo, table,
+  stat, chart, code, image, audio, video, html` — anything else 400s on
+  POST/PATCH (the MCP server and Hermes plugin validate the same set, extended
+  by whatever module types are enabled). A *module* (v1.5) claims extra types;
+  push one while its module is disabled and it 400s like any unknown type.
 - **Media is copied, not streamed from your paths.** The plugin/CLI stage files
   into `data/media/` (the page can't read arbitrary local paths). URLs pass
   through untouched.

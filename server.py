@@ -49,6 +49,127 @@ SSE_LOCK = threading.Lock()
 BOARD_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 DEFAULT_BOARD = "main"
 
+# ---------------- plugins (v1.5) ----------------
+# Optional modules in plugins/<name>/. Each exposes NAME (matching the dir
+# name) and register(app, ctx) -> metadata dict (e.g. {"card_types": {...}}).
+# Enabled via VISOR_MODULES=<comma list>; empty = core only. A missing or
+# crashing module is logged and skipped — core still boots (expect-it-to-
+# break, contained). Plugin endpoints live under /api/plugins/<name>/<sub>.
+MODULES = []          # [name, ...] enabled + registered, in load order
+MODULE_META = {}      # name -> register() return value
+PLUGIN_HANDLERS = {}  # name -> {"route": fn, "transform": fn}
+PLUGIN_CTX = None     # set at load time; given to every register()
+
+PLUGIN_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
+
+
+def _plugin_path(name, fn):
+    p = os.path.join(ROOT, "plugins", name, fn)
+    return p if os.path.isfile(p) else None
+
+
+def plugin_file_read(name, fn):
+    p = _plugin_path(name, fn)
+    if not p:
+        return None
+    with open(p) as f:
+        return f.read()
+
+
+def load_modules():
+    global PLUGIN_CTX
+    wanted = [m.strip() for m in os.environ.get("VISOR_MODULES", "").split(",") if m.strip()]
+    PLUGIN_CTX = {
+        "plugin_dir": lambda name: os.path.join(DATA_DIR, "plugins", name),
+        "emit": lambda event: broadcast(dict(event)),
+        "log": print,
+    }
+    for name in wanted:
+        if not PLUGIN_RE.match(name):
+            print(f"visor: skipping bad module name {name!r}", flush=True)
+            continue
+        if not _plugin_path(name, "__init__.py"):
+            print(f"visor: module {name!r} not found in plugins/ — skipped", flush=True)
+            continue
+        try:
+            import importlib
+            mod = importlib.import_module(f"plugins.{name}")
+            meta = mod.register(PLUGIN_CTX) or {}
+            MODULES.append(name)
+            MODULE_META[name] = meta
+            PLUGIN_HANDLERS[name] = {
+                "route": getattr(mod, "route", None),
+                "transform": getattr(mod, "transform", None),
+            }
+            print(f"visor: module {name!r} loaded ({meta.get('description', '')})".rstrip(),
+                  flush=True)
+        except Exception:
+            import traceback
+            print(f"visor: module {name!r} failed to load — skipped:", flush=True)
+            traceback.print_exc()
+
+
+def plugin_types():
+    """Block types claimed by enabled modules, plus the core set."""
+    extra = []
+    for name in MODULES:
+        extra.extend((MODULE_META.get(name, {}).get("card_types") or {}).keys())
+    return set(CORE_BLOCK_TYPES) | set(extra)
+
+
+def plugin_manifest():
+    return [{"name": n,
+             "src": f"/plugins/{n}/client.js",
+             "card_types": sorted((MODULE_META.get(n, {}).get("card_types") or {}).keys())}
+            for n in MODULES]
+
+
+def transform_block(board_id, blk):
+    """Run enabled modules' transform hooks in load order. A hook may return
+    a modified block dict (typically adjusting 'data') or None/blk to keep it
+    unchanged. Used by POST /api/blocks and PATCH /api/blocks."""
+    for name in MODULES:
+        fn = PLUGIN_HANDLERS.get(name, {}).get("transform")
+        if fn:
+            try:
+                out = fn(board_id, blk)
+                if out:
+                    blk = out
+            except Exception:
+                import traceback
+                print(f"visor: module {name!r} transform failed:", flush=True)
+                traceback.print_exc()
+    return blk
+
+
+def handle_plugin_request(method, sub_path, query, body, send):
+    """Dispatch /api/plugins/<name>/<sub> to the module's route() (if any).
+    `send(code, payload)` writes the response. Returns False if no enabled
+    module claims <name> (caller 404s) — True once the module answered (or
+    explicitly 404'd on its own)."""
+    parts = sub_path.split("/", 1)
+    if not parts or not PLUGIN_RE.match(parts[0]) or parts[0] not in MODULES:
+        return False
+    name = parts[0]
+    route = PLUGIN_HANDLERS.get(name, {}).get("route")
+    if route is None:
+        send(404, {"error": f"module {name!r} has no routes"})
+        return True
+    try:
+        route(method, parts[1] if len(parts) > 1 else "", query, body, send)
+    except Exception:
+        import traceback
+        print(f"visor: module {name!r} route failed:", flush=True)
+        traceback.print_exc()
+        send(500, {"error": f"module {name!r} error"})
+    return True
+
+
+# Core block types. Plugins extend this set (plugin_types()); POST rejects
+# anything else — a module-off push fails with 400, same as an unknown type.
+CORE_BLOCK_TYPES = ["section", "text", "todo", "table", "stat", "chart", "code",
+                    "image", "audio", "video", "html"]
+
 
 def _new_board(title):
     return {"title": title, "seq": 0, "blocks": [], "links": []}
@@ -266,8 +387,31 @@ class Handler(BaseHTTPRequestHandler):
             # Open (no auth) so compose healthchecks and agents can probe
             # readiness without a token or parsing the board list.
             self._send(200, {"ok": True, "auth": bool(TOKEN)})
+        elif u.path == "/api/modules":
+            # Open: the client boot fetches this before deciding what JS to
+            # load, and it's just a name/manifest list (no state).
+            self._send(200, {"modules": plugin_manifest()})
+        elif u.path.startswith("/plugins/"):
+            # /plugins/<name>/client.js — served from the repo's plugins/ dir
+            # (image-baked, so no volume-mount dependency). Only enabled
+            # modules are served; the manifest only lists those, so a 404
+            # here means disk/env drift, not a live module. Static asset like
+            # the page itself — open (matches / and /index.html).
+            m = re.match(r"^/plugins/([\w-]+)/client\.js$", u.path)
+            if m and m.group(1) in MODULES:
+                js = plugin_file_read(m.group(1), "client.js")
+                if js is not None:
+                    self._send(200, js.encode(), "application/javascript; charset=utf-8")
+                    return
+            self._send(404, {"error": "not found"})
         elif self._need_auth():
             return
+        elif u.path.startswith("/api/plugins/"):
+            # Auth-gated plugin endpoints (like the rest of /api/*).
+            sub = u.path[len("/api/plugins/"):]
+            if not handle_plugin_request("GET", sub, parse_qs(urlparse(self.path).query),
+                                         {}, self._send):
+                self._send(404, {"error": "not found"})
         elif u.path == "/api/state":
             bid = self._board_param()
             if bid is None:
@@ -319,12 +463,27 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         if self._need_auth():
             return
+        if u.path.startswith("/api/plugins/"):
+            body = self._body()
+            if body is _BODY_ABORT:
+                return
+            if not handle_plugin_request("POST", u.path[len("/api/plugins/"):],
+                                         parse_qs(u.query), body, self._send):
+                self._send(404, {"error": "not found"})
+            return
         body = self._body()
         if body is _BODY_ABORT:
             return
         if u.path == "/api/blocks":
             bid = self._board_param(body)
             if bid is None:
+                return
+            # Block types: core set + types claimed by enabled modules.
+            # A module-off push of its type 400s (same as unknown types).
+            btype = str(body.get("type", "text"))
+            if btype not in plugin_types():
+                self._send(400, {"error": f"unknown block type {btype!r}",
+                                 "valid": sorted(plugin_types())})
                 return
             focus = bool(body.get("focus"))
             w = self._num(body.get("w", 1), 1, 3, "w", default=1)
@@ -352,6 +511,10 @@ class Handler(BaseHTTPRequestHandler):
                     "v": 1,
                     "ts": time.time(),
                 }
+                # Modules may rewrite the block before it's stored (e.g. chat:
+                # an agent-pushed reply appends to the thread instead of
+                # replacing the card). Runs under LOCK like the rest.
+                blk = transform_block(bid, blk)
                 b["blocks"].append(blk)
                 save(st)
                 broadcast({"op": "boards"})
@@ -449,6 +612,14 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         if self._need_auth():
             return
+        if u.path.startswith("/api/plugins/"):
+            body = self._body()
+            if body is _BODY_ABORT:
+                return
+            if not handle_plugin_request("PATCH", u.path[len("/api/plugins/"):],
+                                         parse_qs(u.query), body, self._send):
+                self._send(404, {"error": "not found"})
+            return
         lm = re.match(r"^/api/links/([\w-]+)$", u.path)
         if lm:
             lid = lm.group(1)
@@ -523,9 +694,20 @@ class Handler(BaseHTTPRequestHandler):
             if not blk:
                 self._send(404, {"error": "no block"})
                 return
+            prev_type = blk["type"]
             for k in ("title", "type", "data"):
                 if k in body:
                     blk[k] = body[k]
+            # Type changes are validated like POST (a module-off type 400s).
+            if blk["type"] not in plugin_types():
+                blk["type"] = prev_type
+                self._send(400, {"error": f"unknown block type {body.get('type')!r}",
+                                 "valid": sorted(plugin_types())})
+                return
+            # Module transforms run on data updates too (chat: a thread PATCH
+            # must go through the same merge as an agent-pushed reply).
+            if "data" in body:
+                blk = transform_block(target, blk)
             blk.update(new)
             blk["v"] += 1
             blk["ts"] = time.time()
@@ -603,9 +785,11 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    load_modules()
     srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
     srv.daemon_threads = True
-    print(f"visor: http://localhost:{PORT}  (store: {STORE})", flush=True)
+    mods = ", ".join(MODULES) if MODULES else "none"
+    print(f"visor: http://localhost:{PORT}  (store: {STORE}, modules: {mods})", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

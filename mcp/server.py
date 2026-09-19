@@ -29,7 +29,7 @@ HOME = os.environ.get("VISOR_HOME") or os.path.dirname(os.path.dirname(os.path.a
 MEDIA_DIR = os.path.join(HOME, "data", "media")
 TOKEN = os.environ.get("VISOR_TOKEN", "").strip()
 AUTO_START = os.environ.get("VISOR_AUTO_START", "1") != "0"
-SERVER_INFO = {"name": "visor", "version": "1.4.6"}
+SERVER_INFO = {"name": "visor", "version": "1.5.0"}
 PROTOCOL_FALLBACK = "2025-06-18"
 
 BLOCK_TYPES = ["section", "text", "todo", "table", "stat", "chart", "code",
@@ -149,6 +149,28 @@ def ensure_server():
         f"`cd <visor-repo> && docker compose up -d` (or `python3 server.py`).")
 
 
+def _module_types():
+    """Extra block types from enabled modules (v1.5), cached. The server's
+    /api/modules is open (no auth) and the manifest carries card_types."""
+    global _MODULE_TYPES_CACHE
+    if _MODULE_TYPES_CACHE is None:
+        try:
+            with urllib.request.urlopen(BASE + "/api/modules", timeout=2.0) as r:
+                man = json.loads(r.read())
+            _MODULE_TYPES_CACHE = [t for m in man.get("modules", [])
+                                   for t in m.get("card_types", [])]
+        except Exception:
+            _MODULE_TYPES_CACHE = []
+    return _MODULE_TYPES_CACHE
+
+
+_MODULE_TYPES_CACHE = None
+
+
+def valid_types():
+    return list(BLOCK_TYPES) + _module_types()
+
+
 def stage(src):
     src = os.path.expanduser(src)
     if os.path.exists(src):
@@ -170,10 +192,11 @@ def tool_push(args):
         _http("POST", f"/api/clear{q}", {})
         out["cleared"] = True
     blocks = args.get("blocks") or []
+    types = valid_types()
     for i, b in enumerate(blocks):
         btype = b.get("type")
-        if btype not in BLOCK_TYPES:
-            out["blocks"].append({"error": f"bad type {btype!r}", "valid": BLOCK_TYPES})
+        if btype not in types:
+            out["blocks"].append({"error": f"bad type {btype!r}", "valid": types})
             continue
         data = dict(b.get("data") or {})
         # LLMs sometimes nest the content under the type key

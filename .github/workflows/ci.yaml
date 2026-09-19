@@ -14,6 +14,7 @@ jobs:
       - name: Syntax checks
         run: |
           python3 -m py_compile server.py visor.py mcp/server.py scripts/smoke.py
+          python3 -m py_compile plugins/__init__.py plugins/selftest/__init__.py
           # the client is one big <script> blob — a single syntax error kills
           # the whole page, so lint it here instead of by hand
           node -e "
@@ -24,6 +25,11 @@ jobs:
             new Function(m[1]);
             console.log('index.html script: syntax OK (' + m[1].split('\n').length + ' lines)');
           "
+          # module client scripts: same rule, one per file
+          for f in plugins/*/client.js; do
+            node -e "new Function(require('fs').readFileSync(process.argv[1], 'utf8'))" "$f" \
+              || { echo "plugin client syntax error: $f"; exit 1; }
+          done
 
       - name: Build container
         run: docker compose build -q
@@ -42,6 +48,35 @@ jobs:
 
       - name: Smoke test
         run: python3 scripts/smoke.py
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v --remove-orphans || true
+
+  # Plugin path (v1.5): same image with VISOR_MODULES=selftest — asserts the
+  # manifest, transform hook, module route, and client.js serving. The container
+  # name is shared (container_name: visor), so this job removes it first.
+  smoke-modules:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build container
+        run: docker compose build -q
+
+      - name: Start with selftest module
+        run: |
+          export VISOR_USER="$(id -u):$(id -g)"
+          docker rm -f visor >/dev/null 2>&1 || true
+          VISOR_MODULES=selftest docker compose up -d
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:8900/api/boards >/dev/null && break
+            sleep 1
+          done
+          docker logs visor 2>&1 | grep -E "module|visor:" || true
+
+      - name: Smoke test (module cases)
+        run: python3 scripts/smoke.py --with-modules selftest
 
       - name: Tear down
         if: always()

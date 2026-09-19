@@ -423,9 +423,67 @@ function bodyHTML(b){
       return `<div class="imgblk"><img src="${esc(d.src||'')}" alt="">${d.caption?`<div class="cap">${esc(d.caption)}</div>`:''}</div>`;
     case 'html':
       return `<div class="raw">${d.html||''}</div>`;
-    default:
+    default: {
+      // Plugin module card types (v1.5): a loaded module claims a block type
+      // and provides its own renderer. Unknown non-module types fall through
+      // to the JSON-dump fallback below.
+      const mod = moduleForType(b.type);
+      if (mod && mod.renderCard){
+        try { return mod.renderCard(b); }
+        catch(e){ console.warn(`visor module ${mod.name} renderCard failed`, e);
+          return `<div class="md"><div class="cap">module ${esc(mod.name)} render error</div></div>`; }
+      }
       return `<div class="md">${md(JSON.stringify(d))}</div>`;
+    }
   }
+}
+
+/* ---------- plugin modules (v1.5) ----------
+   Enabled modules are announced by GET /api/modules at boot; each loads
+   /plugins/<name>/client.js, which registers window.VisorModules.<name> =
+   {cardTypes, renderCard, onSSE?, onBoard?}. Modules render cards (via
+   bodyHTML's default branch), react to SSE ops (onSSE) and board switches
+   (onBoard). They must not touch core state directly. */
+window.VisorModules = window.VisorModules || {};
+const MODULES_BY_TYPE = {};
+function moduleForType(type){
+  const name = MODULES_BY_TYPE[type];
+  if (!name) return null;
+  const mod = window.VisorModules[name];
+  return mod ? {name, ...mod} : null;
+}
+function registerModule(name, def){
+  if (!def || !Array.isArray(def.cardTypes)) return;
+  for (const t of def.cardTypes) MODULES_BY_TYPE[t] = name;
+}
+function forwardSSE(msg){
+  for (const name in window.VisorModules){
+    const h = window.VisorModules[name] && window.VisorModules[name].onSSE;
+    if (h){ try { h(msg); } catch(e){ console.warn(`module ${name} onSSE failed`, e); } }
+  }
+}
+function forwardBoard(bid){
+  for (const name in window.VisorModules){
+    const h = window.VisorModules[name] && window.VisorModules[name].onBoard;
+    if (h){ try { h(bid); } catch(e){ console.warn(`module ${name} onBoard failed`, e); } }
+  }
+}
+async function loadModules(){
+  try {
+    const res = await fetch('/api/modules');
+    const man = await res.json();
+    for (const m of man.modules || []){
+      await new Promise((resolve) => {
+        const s = document.createElement('script');
+        s.src = m.src;
+        s.onload = resolve; s.onerror = () => { console.warn('module load failed:', m.src); resolve(); };
+        document.head.appendChild(s);
+      });
+      const def = window.VisorModules[m.name];
+      if (def) registerModule(m.name, def);
+      else console.warn('module announced but did not register:', m.name);
+    }
+  } catch(e){ console.warn('module manifest fetch failed', e); }
 }
 
 function widthFor(b){ return COL_W * (b.w||1) + 24 * ((b.w||1)-1); }
@@ -472,6 +530,19 @@ function makeEl(b){
   el.innerHTML =
     (b.type==='section' ? '' : `<div class="bar"><span class="tag">${esc(b.type)}</span><span class="ttl">${esc(b.title||'')}</span><span class="wbtn" title="toggle wide card">${(b.w||1)>=2 ? '⟨⟩' : '⟩⟨'}</span><span class="x" title="remove">✕</span></div>`) +
     `<div class="bd">${bodyHTML(b)}</div>`;
+  // innerHTML insertion parses <script> but never executes it — re-run them so
+  // agent-pushed html blocks (interactive mocks, live visualizations) and
+  // module-rendered cards (v1.5) actually work.
+  {
+    const runScripts = el.querySelectorAll('.bd script');
+    if (runScripts.length){
+      runScripts.forEach(s => {
+        const n = document.createElement('script');
+        n.textContent = s.textContent;
+        s.replaceWith(n);
+      });
+    }
+  }
   el.querySelector('.bar')?.addEventListener('pointerdown', e => startDrag(e, el, b.id));
   el.querySelector('.x')?.addEventListener('click', e => { e.stopPropagation(); apiDel(b.id); });
   const wb = el.querySelector('.wbtn');
@@ -1149,6 +1220,7 @@ function switchBoard(bid){
   currentBoard = bid;
   renderTabs();
   boot(true);
+  forwardBoard(bid);
 }
 
 /* ================= server comms ================= */
@@ -1193,6 +1265,7 @@ function connect(){
   };
   es.onmessage = ev => {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
+    forwardSSE(msg);
     const bid = msg.board || DEFAULT_BOARD;
     if (msg.op === 'upsert'){
       if (bid !== currentBoard){ refreshBoards(); return; }
@@ -1312,7 +1385,14 @@ async function boot(keepView){
   refreshBoards();
   connect();
 }
-boot(false);
+boot(false).then(() => {
+  loadModules().then(() => {
+    // Module JS may have declared card types; re-render the current board so
+    // any module-typed blocks present before the module loaded get their
+    // proper cards (core already renders them via the JSON fallback).
+    if (Object.keys(MODULES_BY_TYPE).length) return boot(true);
+  });
+});
 // No periodic auto-refit: the camera only moves on user input, new blocks (first on
 // an empty board), focus events, or the Fit button. Per-board views persist in localStorage.
 </script>

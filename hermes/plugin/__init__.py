@@ -38,6 +38,16 @@ COMPOSE = ROOT / "docker-compose.yml"
 
 _BLOCK_TYPES = ["section", "text", "todo", "table", "stat", "chart", "code",
                 "image", "audio", "video", "html"]
+# v1.5: modules may declare extra block types (GET /api/modules). Merge them
+# in once per process so visor_push can push module-typed blocks.
+try:
+    with urllib.request.urlopen(BASE + "/api/modules", timeout=2.0) as _r:
+        for _m in json.loads(_r.read()).get("modules", []):
+            for _t in _m.get("card_types", []):
+                if _t not in _BLOCK_TYPES:
+                    _BLOCK_TYPES.append(_t)
+except Exception:
+    pass  # server down at import: core types only; pushes auto-start it
 
 VISOR_PUSH_SCHEMA: Dict[str, Any] = {
     "type": "function",

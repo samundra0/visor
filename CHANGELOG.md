@@ -3,6 +3,34 @@
 All notable changes to Visor. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.5.0] — 2026-09-19
+
+- **Plugin/module architecture.** Optional modules in `plugins/<name>/` now
+  extend the core without touching it. A module provides a server half
+  (`register()` → card types, plus optional `transform` push-rewrite and
+  `route()` for `/api/plugins/<name>/*` endpoints) and a client half
+  (`client.js` registering `window.VisorModules.<name>` with a `renderCard`).
+  Enabled via `VISOR_MODULES=<comma list>` (empty = core only, unchanged).
+  Missing or crashing modules are logged and skipped — the core still boots.
+  See `docs/design/plugins-v1.5.md` for the full contract.
+  - New open `GET /api/modules` manifest (name, client.js src, card_types).
+  - New `GET /plugins/<name>/client.js` (served from the image, enabled only).
+  - Block types are now a closed set: core 11 + whatever module types are
+    enabled. POST/PATCH of a type no enabled module claims → 400. The MCP
+    server and Hermes plugin read the manifest so they accept module types too.
+  - `selftest` module ships as the canonical template + CI fixture.
+- **`html` block scripts now run.** Card bodies are injected via `innerHTML`,
+  which parses `<script>` but never executes it — so interactive mocks and
+  live visualizations pushed as `html` blocks rendered as dead/blank boxes.
+  `makeEl` now re-runs any `<script>` in a card body (html blocks and
+  module-rendered cards). Verified live via CDP (a canvas+SVG mock went from
+  0 rendered nodes to animating).
+- **CI** gains a `smoke-modules` job (builds with `VISOR_MODULES=selftest`,
+  asserts manifest/transform/route/client.js) and lints every module
+  `client.js`. `scripts/smoke.py` takes `--base` / `--with-modules`.
+- **Dockerfile/compose** copy `plugins/` into the image and pass
+  `VISOR_MODULES` through.
+
 ## [1.4.6] — 2026-09-15
 
 - **SSE dead on load (regression from 1.4.5).** The optional-auth wrapper

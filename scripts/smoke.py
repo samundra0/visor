@@ -1,8 +1,22 @@
 #!/usr/bin/env python3
-"""Local copy of the CI smoke test — run against a live visor on :8900."""
-import json, urllib.request, urllib.parse
+"""Local copy of the CI smoke test — run against a live visor on :8900.
 
-BASE = "http://127.0.0.1:8900"
+Usage:
+  python3 scripts/smoke.py                    # core cases (module-off server)
+  python3 scripts/smoke.py --base URL         # against a different instance
+  python3 scripts/smoke.py --with-modules selftest
+      # additionally asserts the plugin paths work end-to-end (server must
+      # have run with VISOR_MODULES including selftest)
+"""
+import argparse, json, urllib.request, urllib.parse
+
+ap = argparse.ArgumentParser()
+ap.add_argument("--base", default="http://127.0.0.1:8900")
+ap.add_argument("--with-modules", default="",
+                help="comma list of modules to assert plugin cases for")
+ARGS = ap.parse_args()
+BASE = ARGS.base.rstrip("/")
+WITH_MODULES = [m for m in ARGS.with_modules.split(",") if m]
 
 def call(method, path, obj=None):
     data = json.dumps(obj).encode() if obj is not None else None
@@ -121,6 +135,39 @@ call("DELETE", f"/api/blocks/{b2['id']}?board={bq}")
 stt = call("GET", f"/api/state?board={bq}")
 assert stt.get("links", []) == [], stt
 print("link prune on block delete OK")
+
+# --- plugins (v1.5) ---
+# The module manifest is an open route; core-only servers return [].
+man = json.loads(urllib.request.urlopen(BASE + "/api/modules").read())
+mods = [m["name"] for m in man.get("modules", [])]
+assert isinstance(man.get("modules"), list), man
+print("modules manifest OK:", mods or "none")
+
+# A module-off push of its type must 400 (same as unknown types).
+if not (set(mods) & {"selftest"}):
+    code = call_expect(400, "POST", f"/api/blocks?board={bq}",
+                       {"type": "selftest", "title": "off", "data": {}})
+    print("module-off type rejected (400) OK")
+if "selftest" in WITH_MODULES and "selftest" in mods:
+    # transform hook: the stored block must be rewritten by the module
+    r = call("POST", f"/api/blocks?board={bq}",
+             {"type": "selftest", "title": "on", "data": {"html": "hi"}})
+    sid = r["id"]
+    assert r["data"].get("touched") is True, r
+    assert r["data"].get("board") == bid, r
+    stt = call("GET", f"/api/state?board={bq}")
+    stored = next(x for x in stt["blocks"] if x["id"] == sid)
+    assert stored["data"]["touched"] is True, stored
+    print("module transform applied on push + persisted OK")
+    # module route: /api/plugins/selftest/ping
+    pong = call("GET", "/api/plugins/selftest/ping")
+    assert pong.get("pong") is True, pong
+    print("module route OK")
+    # module client.js is served for enabled modules
+    js = urllib.request.urlopen(BASE + "/plugins/selftest/client.js").read().decode()
+    assert "VisorModules" in js, js[:80]
+    print("module client.js served OK")
+    call("DELETE", f"/api/blocks/{sid}?board={bq}")
 
 # cleanup
 call("DELETE", f"/api/boards/{bq}")
