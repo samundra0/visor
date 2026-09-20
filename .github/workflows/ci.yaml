@@ -70,7 +70,7 @@ jobs:
         run: |
           export VISOR_USER="$(id -u):$(id -g)"
           docker rm -f visor >/dev/null 2>&1 || true
-          VISOR_MODULES=selftest,live docker compose up -d
+          VISOR_MODULES=selftest,live,chat docker compose up -d
           for i in $(seq 1 30); do
             curl -sf http://localhost:8900/api/boards >/dev/null && break
             sleep 1
@@ -78,7 +78,7 @@ jobs:
           docker logs visor 2>&1 | grep -E "module|visor:" || true
 
       - name: Smoke test (module cases)
-        run: python3 scripts/smoke.py --with-modules selftest,live
+        run: python3 scripts/smoke.py --with-modules selftest,live,chat
 
       - name: Tear down
         if: always()

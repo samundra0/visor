@@ -235,6 +235,53 @@ Environment:
 | `VISOR_TOKEN` | _(unset = open)_ | optional bearer token. When set, `/api/*` and `/media/*` require `Authorization: Bearer <token>`. Open the UI with `?token=*** (EventSource can't set headers). The CLI, MCP server, and Hermes plugin all read the same var. `/`, the page, and `/api/health` stay open. |
 | `VISOR_MODULES` | _(empty = core only)_ | optional module plugins (v1.5): comma list from `plugins/`, e.g. `selftest,live`. A module adds block types, card renderers, `/api/plugins/<name>/*` endpoints, and may transform pushes before storage. `live` (v1.6) adds auto-refreshing blocks that poll a URL on an interval. Missing/crashing modules are logged and skipped — core still boots. See `docs/design/plugins-v1.5.md`. |
 | `VISOR_LIVE_LOCAL_HOSTS` | _(empty = all hosts)_ | `live` module only: comma-list of allowed poll-target hosts (names or IPs). Empty allows everything (fine for a personal canvas on a trusted network); set e.g. `10.0.0.5,aigateway.local` for networked installs. Fetches stay http(s)-only, 10s timeout, 1MB cap. |
+| `VISOR_CHAT_URL` | _(unset)_ | `chat` module only: the Hermes webhook route to POST user messages to, e.g. `http://host.docker.internal:8645/webhooks/visor-chat`. Set together with `VISOR_CHAT_SECRET`; unset = the card runs in "bridge not configured" mode. |
+| `VISOR_CHAT_SECRET` | _(unset)_ | `chat` module only: the route's HMAC secret (from `hermes webhook list`). Messages are signed Standard/generic-V2: `X-Webhook-Timestamp` + `X-Webhook-Signature-V2` = hex HMAC-SHA256 of `<ts>.<body>`. |
+| `VISOR_CHAT_REPLY` | `agent` | `chat` module only: the `reply_tag` string the agent sets on its reply blocks. The card tracks the latest `reply_tag` block's ts on the board to clear its waiting state. |
+
+## Chat bridge setup (v1.7, chat module)
+
+Talk to your Hermes agent from a card on the canvas. One-shot setup:
+
+```sh
+# 1. enable the webhook platform in Hermes (once)
+hermes config set platforms.webhook.enabled true
+hermes config set platforms.webhook.extra.port 8645     # avoid 8644 if api_server uses it
+hermes config set platforms.webhook.extra.secret "$(openssl rand -hex 16)"
+
+# 2. create the route (returns URL + secret; stored in webhook_subscriptions.json)
+hermes webhook subscribe visor-chat \
+  --prompt "A user asked you via the Visor canvas (board: {board}):
+
+{message}
+
+Reply by pushing a block to the Visor: use your visor_push tool with board \"{board}\" and a text block: {\"type\":\"text\",\"title\":\"agent\",\"data\":{\"reply_tag\":\"agent\",\"md\":\"<your answer>\"}}. Keep the answer concise and canvas-friendly. After pushing, give a one-line confirmation." \
+  --description "Visor canvas chat bridge"
+
+# 3. run the gateway (the webhook platform + agent turns live there)
+hermes gateway run        # or your systemd service
+
+# 4. point the visor at it
+VISOR_MODULES=live,chat \
+VISOR_CHAT_URL=http://host.docker.internal:8645/webhooks/visor-chat \
+VISOR_CHAT_SECRET=***   # from `hermes webhook list`
+docker compose up -d
+
+# 5. push a chat block (normal block type — CLI, visor_push, or MCP all work)
+python3 visor.py chat "agent chat"    # -> board main, or add --board <id>
+```
+
+Notes:
+- `host.docker.internal` resolves to the host via compose `extra_hosts`
+  (already in this repo's `docker-compose.yml`). On some laptops the
+  container→host path is firewall-filtered — if sends time out, check
+  `docker exec visor curl -m 5 http://host.docker.internal:8645/health`
+  and allow the docker bridge in `FORWARD` if needed.
+- The agent's reply is a **normal visor block** pushed via `visor_push`
+  with `data.reply_tag="agent"` — it appears on the board like any push,
+  so the bridge survives agent restarts and the card just tracks it.
+- Unconfigured (`VISOR_CHAT_URL` unset): the card still renders and shows
+  "bridge not configured" on send. No crash, no core impact.
 
 ## Design notes & honest limits
 

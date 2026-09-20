@@ -26,6 +26,14 @@ services:
       # Optional modules (v1.5): comma list from plugins/, e.g. "chat,voice".
       # Empty = core only. Unknown names are logged and skipped at boot.
       - VISOR_MODULES=${VISOR_MODULES:-}
+      # Chat bridge (v1.7, chat module only): the Hermes webhook route it
+      # posts to + the route's HMAC secret. Leave unset to run the card in
+      # "not configured" mode. The prompt the agent runs should tell it to
+      # push replies back with visor_push, data.reply_tag="agent" (or
+      # VISOR_CHAT_REPLY).
+      - VISOR_CHAT_URL=${VISOR_CHAT_URL:-}
+      - VISOR_CHAT_SECRET=${VISOR_CHAT_SECRET:-}
+      - VISOR_CHAT_REPLY=${VISOR_CHAT_REPLY:-agent}
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8900/api/health', timeout=2).status==200 else 1)"]
       interval: 30s

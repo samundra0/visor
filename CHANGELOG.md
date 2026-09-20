@@ -3,7 +3,42 @@
 All notable changes to Visor. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
-## [1.6.0] — 2026-09-20 (unreleased)
+## [1.7.0] — 2026-09-20 (unreleased)
+
+- **`chat` module: agent chat bridge.** `{"type": "chat"}` card = a
+  transcript + input box on the canvas. Sending a message POSTs to a
+  Hermes **webhook route** (signed Standard/generic-V2:
+  `X-Webhook-Timestamp` + `X-Webhook-Signature-V2` = hex HMAC-SHA256 of
+  `<ts>.<body>` — verified against `gateway/platforms/webhook.py`), which
+  runs a full agent turn; the agent answers by pushing a normal block
+  with `data.reply_tag` (default `agent`) via `visor_push`, and the card
+  picks it up from board state — so replies work across agent restarts
+  and every reply is a real, persisted block.
+  - Config via env only: `VISOR_CHAT_URL` (route URL), `VISOR_CHAT_SECRET`
+    (route secret), `VISOR_CHAT_REPLY` (tag, default `agent`). Unset URL =
+    card renders with a "bridge not configured" hint; nothing crashes.
+  - `GET /api/plugins/chat/status?board=` → per-board transcripts +
+    pending sends; `GET /api/plugins/chat/config` → configured state.
+  - Setup recipe in the README (enable `platforms.webhook`, create the
+    route with `hermes webhook subscribe`, run the gateway, point the
+    visor at it). End-to-end verified: card send → webhook 202 → agent
+    turn → `agent` reply block on the board.
+  - `visor.py chat [title]` CLI verb pushes a chat card.
+  - `docker-compose.yml` passes the three `VISOR_CHAT_*` vars through.
+
+## [1.6.1] — 2026-09-20
+
+- **In-place content updates (no more card jumps).** SSE upserts that
+  changed only a block's content (same type + width) now swap the card
+  body in place (`swapBody`) instead of remove + rebuild + re-append —
+  which replayed the pop animation and, worse, re-ran placement with a
+  stale cached height so the card painted in its initial slot and then
+  jumped to the final one on the next re-measure. `placeAll()` now only
+  runs when the element's height actually changed.
+- **Board deep links.** `?board=<id>` is honored at boot (switches after
+  the initial load) — previously it was silently ignored.
+
+## [1.6.0] — 2026-09-20
 
 - **`live` module: auto-refreshing data blocks.** `{"type": "live",
   "data": {"url", "interval", "extract", "as"}}` polls a URL on an

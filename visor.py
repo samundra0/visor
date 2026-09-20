@@ -226,8 +226,12 @@ def main():
         bpost(f"/api/blocks{bq}", {"type": "audio", "title": rest[0],
                              "data": {"items": items}})
     elif cmd == "html":
-        bpost(f"/api/blocks{bq}", {"type": "html", "title": rest[0],
+        bpost(f"/api/blocks{bq}", {"type": "html", "title": rest[0] if rest else "",
                              "data": {"html": rest[1] if len(rest) > 1 else ""}})
+    elif cmd == "chat":
+        # chat bridge card (chat module). Title optional.
+        bpost(f"/api/blocks{bq}", {"type": "chat", "title": rest[0] if rest else "agent chat",
+                             "data": {}})
     elif cmd == "list":
         st = request("GET", f"/api/state{bq}")
         for b in st["blocks"]:

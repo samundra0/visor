@@ -217,6 +217,51 @@ if "live" in WITH_MODULES and "live" in mods:
     call("DELETE", f"/api/blocks/{lid}?board={bq}")
     call("DELETE", f"/api/blocks/{bid2}?board={bq}")
 
+if "chat" in WITH_MODULES and "chat" in mods:
+    # config reflects env (CI runs with VISOR_CHAT_URL unset -> configured=false)
+    cfg = call("GET", "/api/plugins/chat/config")
+    assert cfg.get("configured") in (True, False), cfg
+    print("chat config OK:", cfg)
+    # client.js is served for the module
+    js = urllib.request.urlopen(BASE + "/plugins/chat/client.js").read().decode()
+    assert "VisorModules" in js, js[:80]
+    print("chat client.js served OK")
+    # push a chat card (transform adds the placeholder)
+    r = call("POST", f"/api/blocks?board={bq}", {"type": "chat", "title": "ci chat", "data": {}})
+    cid = r["id"]
+    assert "placeholder" in (r.get("data") or {}), r
+    # unconfigured send: sent=false + a "not configured" reason, no 500;
+    # the user line still lands in the transcript
+    if not cfg["configured"]:
+        s = call("POST", f"/api/plugins/chat/send?board={bq}",
+                 {"message": "hi", "block": cid})
+        assert s.get("sent") is False, s
+        assert "configured" in (s.get("reason") or "").lower(), s
+        print("chat send (unconfigured) OK")
+    else:
+        call("POST", f"/api/plugins/chat/send?board={bq}",
+             {"message": "hi", "block": cid})
+    stt = call("GET", f"/api/plugins/chat/status?board={bq}")
+    tx = (stt.get("transcripts") or {}).get(cid) or []
+    assert any(m.get("who") == "user" for m in tx), stt
+    print("chat transcript (user line) OK")
+    # agent reply registration: appends agent line, clears pending
+    call("POST", "/api/plugins/chat/reply",
+         {"block": cid, "text": "pong"})
+    stt = call("GET", f"/api/plugins/chat/status?board={bq}")
+    tx = (stt.get("transcripts") or {}).get(cid) or []
+    assert any(m.get("who") == "agent" and m.get("text") == "pong" for m in tx), stt
+    assert cid not in (stt.get("pending") or {}), stt
+    print("chat reply route (agent line + pending clear) OK")
+    # reply_tag tracking: a block the agent pushed (reply_tag) sets reply_ts
+    call("POST", f"/api/blocks?board={bq}",
+         {"type": "text", "title": "agent",
+          "data": {"reply_tag": "agent", "text": "pong"}})
+    stt = call("GET", f"/api/plugins/chat/status?board={bq}")
+    assert (stt.get("reply_ts") or 0) > 0, stt
+    print("chat reply_tag tracking (reply_ts) OK")
+    call("DELETE", f"/api/blocks/{cid}?board={bq}")
+
 # cleanup
 call("DELETE", f"/api/boards/{bq}")
 print("cleaned up — SMOKE PASS")
