@@ -522,6 +522,39 @@ function playSeq(cid, start){
   step(start);
 }
 
+function rerunScripts(scope){
+  // innerHTML insertion parses <script> but never executes it — re-run them so
+  // agent-pushed html blocks (interactive mocks, live visualizations) and
+  // module-rendered cards (v1.5) actually work.
+  scope.querySelectorAll('script').forEach(s => {
+    const n = document.createElement('script');
+    n.textContent = s.textContent;
+    s.replaceWith(n);
+  });
+}
+function swapBody(el, b){
+  // Content-only update: replace just the card body in place — no .blk pop
+  // replay, no DOM reorder. Body-level listeners (todo rows, audio play-all)
+  // are re-attached; bar-level ones (drag/x/wbtn/anchors/select) survive.
+  const oldH = el.offsetHeight;
+  el.querySelector('.ttl') && (el.querySelector('.ttl').textContent = b.title || '');
+  const bd = el.querySelector('.bd');
+  if (bd) bd.innerHTML = bodyHTML(b);
+  rerunScripts(el);
+  el.querySelectorAll('.todo li').forEach(li => li.addEventListener('click', () => {
+    const i = +li.dataset.i; const it = blocks.get(b.id)?.meta.data?.items?.[i];
+    if (!it) return;
+    it.done = !it.done;
+    patchBlock(b.id, {data: {items: blocks.get(b.id).meta.data.items}});
+  }));
+  el.querySelector('.mediatools [data-all]')?.addEventListener('click', e => {
+    e.stopPropagation();
+    playSeq(e.currentTarget.dataset.all, 0);
+  });
+  heights.set(b.id, el.offsetHeight);
+  if (Math.abs(oldH - el.offsetHeight) > 1) placeAll();  // neighbors only shift if the card actually resized
+  return oldH;
+}
 function makeEl(b){
   const el = document.createElement('div');
   el.className = 'blk' + (b.type==='section' ? ' sec' : '');
@@ -530,19 +563,7 @@ function makeEl(b){
   el.innerHTML =
     (b.type==='section' ? '' : `<div class="bar"><span class="tag">${esc(b.type)}</span><span class="ttl">${esc(b.title||'')}</span><span class="wbtn" title="toggle wide card">${(b.w||1)>=2 ? '⟨⟩' : '⟩⟨'}</span><span class="x" title="remove">✕</span></div>`) +
     `<div class="bd">${bodyHTML(b)}</div>`;
-  // innerHTML insertion parses <script> but never executes it — re-run them so
-  // agent-pushed html blocks (interactive mocks, live visualizations) and
-  // module-rendered cards (v1.5) actually work.
-  {
-    const runScripts = el.querySelectorAll('.bd script');
-    if (runScripts.length){
-      runScripts.forEach(s => {
-        const n = document.createElement('script');
-        n.textContent = s.textContent;
-        s.replaceWith(n);
-      });
-    }
-  }
+  rerunScripts(el.querySelector('.bd'));
   el.querySelector('.bar')?.addEventListener('pointerdown', e => startDrag(e, el, b.id));
   el.querySelector('.x')?.addEventListener('click', e => { e.stopPropagation(); apiDel(b.id); });
   const wb = el.querySelector('.wbtn');
@@ -1289,9 +1310,16 @@ function connect(){
         const samePos = (o.x === b.x && o.y === b.y);
         if (!sameContent){
           rec.meta = b;
-          if (rec.el?.isConnected) rec.el.remove();
-          const el = makeEl(b); world.appendChild(el); rec.el = el;
-          placeAll();
+          if (o.type===b.type && (o.w||1)===(b.w||1) && rec.el?.isConnected){
+            // content-only update (e.g. live refresh): swap the body in place —
+            // no pop replay, no DOM reorder, no placeAll-with-stale-height
+            // "wrong slot then jump" unless the card actually resized.
+            swapBody(rec.el, b);
+          } else {
+            if (rec.el?.isConnected) rec.el.remove();
+            const el = makeEl(b); world.appendChild(el); rec.el = el;
+            placeAll();
+          }
           if (msg.focus === true){ requestAnimationFrame(()=>focusEl(rec.el)); }
           return;
         }
@@ -1386,6 +1414,14 @@ async function boot(keepView){
   connect();
 }
 boot(false).then(() => {
+  // Deep link: ?board=<id> opens that board if it exists (agent links,
+  // shared URLs). Resolved after the board list loads.
+  const wantBoard = (() => { try { return new URLSearchParams(location.search).get('board') || ''; } catch { return ''; } })();
+  if (wantBoard) {
+    refreshBoards().then(list => {
+      if (wantBoard !== currentBoard && list.some(b => b.id === wantBoard)) switchBoard(wantBoard);
+    });
+  }
   loadModules().then(() => {
     // Module JS may have declared card types; re-render the current board so
     // any module-typed blocks present before the module loaded get their
