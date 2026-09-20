@@ -169,6 +169,54 @@ if "selftest" in WITH_MODULES and "selftest" in mods:
     print("module client.js served OK")
     call("DELETE", f"/api/blocks/{sid}?board={bq}")
 
+if "live" in WITH_MODULES and "live" in mods:
+    import time as _time
+    # happy path: poll our own /api/health (open endpoint), extract "ok"
+    r = call("POST", f"/api/blocks?board={bq}",
+             {"type": "live", "title": "health",
+              "data": {"url": BASE + "/api/health", "interval": 5,
+                       "extract": "ok", "as": "stat"}})
+    lid = r["id"]
+    assert r["data"].get("interval") == 5, r
+    # first refresh happens on the next scheduler tick (~2s) + a bit
+    _time.sleep(6)
+    stt = call("GET", f"/api/state?board={bq}")
+    stored = next(x for x in stt["blocks"] if x["id"] == lid)
+    lv = stored["data"].get("live", {})
+    # poll until the scheduler has written back (first tick ~2s + fetch)
+    for _ in range(15):
+        if lv.get("value") is not None or lv.get("error"):
+            break
+        _time.sleep(2)
+        stt = call("GET", f"/api/state?board={bq}")
+        stored = next(x for x in stt["blocks"] if x["id"] == lid)
+        lv = stored["data"].get("live", {})
+    assert lv.get("value") is True, stored
+    assert lv.get("ts", 0) > 0, stored
+    assert lv.get("error") is None, stored
+    print("live poll + extract + state writeback OK")
+    # error path: unreachable port -> error recorded, value kept as-is
+    r = call("POST", f"/api/blocks?board={bq}",
+             {"type": "live", "title": "broken",
+              "data": {"url": "http://127.0.0.1:1/nope", "interval": 5,
+                       "as": "text"}})
+    bid2 = r["id"]
+    # closed-port connect can be instant (refused) or slow (filtered);
+    # a single 6s sleep raced the tick cadence + fetch time. Poll instead.
+    lv = {}
+    for _ in range(20):
+        _time.sleep(2)
+        stt = call("GET", f"/api/state?board={bq}")
+        stored = next(x for x in stt["blocks"] if x["id"] == bid2)
+        lv = stored["data"].get("live", {})
+        if lv.get("error"):
+            break
+    assert lv.get("error"), stored
+    assert lv.get("fails", 0) >= 1, stored
+    print("live error path (unreachable -> error + fails) OK")
+    call("DELETE", f"/api/blocks/{lid}?board={bq}")
+    call("DELETE", f"/api/blocks/{bid2}?board={bq}")
+
 # cleanup
 call("DELETE", f"/api/boards/{bq}")
 print("cleaned up — SMOKE PASS")

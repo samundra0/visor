@@ -8,6 +8,12 @@ services:
     user: "${VISOR_USER:-1000:1000}"
     ports:
       - "8900:8900"
+    # Let modules running in the container reach services on the host
+    # (live-data poll targets, the chat-bridge webhook platform, H200/TTS
+    # endpoints behind the host's gateway) via http://host.docker.internal:.
+    # Linux-only knob; harmless elsewhere.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./data:/data
     environment:

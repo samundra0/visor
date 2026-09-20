@@ -57,26 +57,31 @@ no `pip install -e`, no network fetching of code.
 ```python
 NAME = "chat"                      # must match directory name
 
-def register(app, ctx) -> dict:
+def register(ctx) -> dict:
     """Called once at startup, per enabled module.
-    app: the core HTTP server instance (exposes helper methods)
-    ctx: {store, save, emit(board, op, data), config}
+    ctx: {"plugin_dir", "emit", "log", "core"} — see "Core API surface".
     Returns metadata: {"card_types": {"chat": "<desc>"}, "description": "..."}
     """
 ```
 
-Core API surface given to modules (small, documented):
+Core API surface given to modules (small, documented). `ctx` is a dict:
 
-- `ctx.save(path, data)` / `ctx.load(path, default)` — JSON persistence
-  under `data/plugins/<name>/`.
-- `ctx.emit(board, op, data)` — push an SSE event through the core bus
-  (ops: `upsert`, `links`, `meta`, or a module-namespaced
-  `module:<name>` op the core forwards verbatim).
-- `app.handle(method, path, handler)` — register an endpoint under
-  `/api/plugins/<name>/<path>` (auth-gated like the rest of `/api/*`).
-- `ctx.on_upsert(fn)` — optional server-side transform: `fn(block) -> block`
-  runs before a block of a module-declared type is stored. This is how the
-  chat module appends replies instead of replacing card state.
+- `ctx["plugin_dir"](name)` — returns `data/plugins/<name>/` (already
+  created); the module's own persistence home.
+- `ctx["emit"](event)` — push an SSE event through the core bus (ops:
+  `upsert`, `links`, `meta`, `clear`, … — same shapes the core emits).
+- `ctx["log"](msg)` — log a line to the server stdout.
+- `ctx["core"]` — the canonical server module (`.load()`, `.save(st)`,
+  `.LOCK`, `.get_board(st, bid)`, `broadcast`, …). **Required for any
+  module that touches the store from a background thread.** The server runs
+  as `__main__`, so `import server` in a plugin loads a *second* module copy
+  with its own `LOCK` — updates from the two copies race (lost writes).
+- `register(ctx) -> meta` — called once at boot; returns
+  `{"description", "card_types": {type: oneliner}}`.
+- `transform(board_id, block) -> block|None` — optional; runs before a
+  block of a module-declared type is stored (POST and PATCH-with-data).
+- `route(method, sub_path, query, body, send)` — optional; handles
+  `/api/plugins/<name>/<sub>`; `send(code, payload)` writes the response.
 
 ### Enablement
 
@@ -122,6 +127,7 @@ Core API surface given to modules (small, documented):
 - 1.5.0 = convention + html-script fix + `/api/modules` + CI: smoke test
   gains a "plugin disabled/enabled" case (push a module-declared type with
   the module off → 400; on → 200).
+- 1.6.0 = `live` module (below).
 
 ## 2. `live` module (v1.6.0)
 

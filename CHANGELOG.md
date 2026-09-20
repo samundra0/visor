@@ -3,6 +3,26 @@
 All notable changes to Visor. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.6.0] — 2026-09-20 (unreleased)
+
+- **`live` module: auto-refreshing data blocks.** `{"type": "live",
+  "data": {"url", "interval", "extract", "as"}}` polls a URL on an
+  interval and renders as `stat` (value + delta), `text`, `table`, or
+  `spark` (SVG line of history). Values are extracted by dot-path
+  (`spend.total`) and written back into the stored block, so
+  `/api/state`, exports, and SSE resyncs all carry the latest value.
+  - Server-side scheduler (2s tick) with a **concurrent bounded fetch
+    pool** — one dead/slow endpoint (10s connect timeout) can't starve
+    the others. Stale state is pruned when blocks are deleted.
+  - Failure handling: last value kept, `error` + consecutive `fails`
+    recorded; the card shows the error and dims after 10 straight
+    failures. `GET /api/plugins/live/status` lists poll targets + health.
+  - Fetch safety: http(s) only, 10s timeout, 1MB response cap, optional
+    `VISOR_LIVE_LOCAL_HOSTS` allowlist for networked installs.
+  - `docker-compose.yml` adds `extra_hosts: host.docker.internal:
+    host-gateway` so in-container modules can reach host services
+    (live poll targets, the chat bridge, TTS endpoints).
+
 ## [1.5.0] — 2026-09-19
 
 - **Plugin/module architecture.** Optional modules in `plugins/<name>/` now

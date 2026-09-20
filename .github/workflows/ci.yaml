@@ -14,7 +14,9 @@ jobs:
       - name: Syntax checks
         run: |
           python3 -m py_compile server.py visor.py mcp/server.py scripts/smoke.py
-          python3 -m py_compile plugins/__init__.py plugins/selftest/__init__.py
+          for f in plugins/__init__.py plugins/*/__init__.py; do
+            python3 -m py_compile "$f"
+          done
           # the client is one big <script> blob — a single syntax error kills
           # the whole page, so lint it here instead of by hand
           node -e "
@@ -68,7 +70,7 @@ jobs:
         run: |
           export VISOR_USER="$(id -u):$(id -g)"
           docker rm -f visor >/dev/null 2>&1 || true
-          VISOR_MODULES=selftest docker compose up -d
+          VISOR_MODULES=selftest,live docker compose up -d
           for i in $(seq 1 30); do
             curl -sf http://localhost:8900/api/boards >/dev/null && break
             sleep 1
@@ -76,7 +78,7 @@ jobs:
           docker logs visor 2>&1 | grep -E "module|visor:" || true
 
       - name: Smoke test (module cases)
-        run: python3 scripts/smoke.py --with-modules selftest
+        run: python3 scripts/smoke.py --with-modules selftest,live
 
       - name: Tear down
         if: always()

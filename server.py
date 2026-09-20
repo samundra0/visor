@@ -23,6 +23,7 @@ import mimetypes
 import os
 import queue
 import re
+import sys
 import threading
 import time
 import uuid
@@ -83,6 +84,10 @@ def load_modules():
         "plugin_dir": lambda name: os.path.join(DATA_DIR, "plugins", name),
         "emit": lambda event: broadcast(dict(event)),
         "log": print,
+        # The real core module (we run as __main__, so `import server` in a
+        # plugin would load a SECOND copy with its own LOCK — lost updates).
+        # ctx["core"] is the canonical object: use .load/.save/.LOCK/.get_board.
+        "core": sys.modules[__name__],
     }
     for name in wanted:
         if not PLUGIN_RE.match(name):
