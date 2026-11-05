@@ -3,6 +3,34 @@
 All notable changes to Visor. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.8.0] — 2026-11-05
+
+- **Self-contained plugin (catalog turnkey).** `hermes/plugin/` now ships its
+  own server copy under `hermes/plugin/server/` (server.py, index.html,
+  modules, Dockerfile, compose), mirrored from the root tree by
+  `scripts/bundle.py` and pinned by a CI drift check
+  (`python3 scripts/bundle.py --check`). A catalog install is now one command:
+  `hermes plugins install visor` — no repo clone, no Docker required.
+  - Plugin server resolution: `VISOR_HOME` set = legacy/dev checkout
+    (server at repo root, state in `<repo>/data`, Docker container preferred
+    when present) — unchanged pre-v1.8 behaviour. Unset = bundled server,
+    state in `~/.local/share/visor` (or `$VISOR_DATA`), bare-python start by
+    default.
+  - New env: `VISOR_DOCKER=1` opts into `docker compose up -d` (bundled or
+    legacy tree) instead of bare python; compose's `/data` host side is
+    overridable via `VISOR_DATA_HOST`.
+  - `install.sh` now mirrors the full plugin payload (was: two files).
+- **Chat module fix (v1.7 latent).** Unconfigured `POST /api/plugins/chat/send`
+  now records the user line in the transcript before returning the
+  "bridge not configured" hint — the v1.7 smoke assertion expected this but
+  the early return skipped the append (never caught: v1.5–v1.7 were unpushed,
+  so CI never ran the chat cases).
+- Plugin manifest declares `provides_tools: [visor_push]` +
+  `requires_hermes: ">=0.21.5"` (catalog admission gate:
+  `hermes plugins validate` passes clean).
+- `docker-compose.yml` binds `127.0.0.1:8900` (no LAN exposure) and keeps the
+  data mount overridable (`VISOR_DATA_HOST`).
+
 ## [1.7.0] — 2026-09-20 (unreleased)
 
 - **`chat` module: agent chat bridge.** `{"type": "chat"}` card = a

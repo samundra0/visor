@@ -230,8 +230,8 @@ Declares dependency on `chat` (card shows "needs chat module" if absent).
     82M; same profile).
   - Both optional: without the profile, `voice` module still boots, face
     renders, and cards degrade to "STT/TTS backend not configured" on use.
-  - User's existing H200 services (kokoro-tts :20001 via aigateway, any
-    deployed whisper) plug in via the config endpoints — no code change.
+  - Your existing TTS/STT services (e.g. a local Kokoro TTS HTTP endpoint,
+    any deployed whisper) plug in via the config endpoints — no code change.
 - Privacy note for README: mic audio stays in the browser + the configured
   STT backend; nothing is persisted.
 

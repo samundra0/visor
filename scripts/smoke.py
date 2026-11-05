@@ -53,9 +53,11 @@ page = urllib.request.urlopen(BASE + "/").read().decode()
 assert "VISOR" in page
 print("page OK")
 
-# SSE stream reachable
+# SSE stream reachable (host/port from --base, not hardcoded)
 import socket
-s = socket.create_connection(("127.0.0.1", 8900), timeout=3)
+from urllib.parse import urlparse as _up
+_h, _p = _up(BASE).hostname, _up(BASE).port
+s = socket.create_connection((_h, _p), timeout=3)
 s.sendall(b"GET /api/events HTTP/1.1\r\nHost: x\r\nAccept: text/event-stream\r\n\r\n")
 data = s.recv(200).decode(errors="replace")
 assert "event:" in data or "200" in data, data[:100]

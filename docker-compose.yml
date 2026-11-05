@@ -7,15 +7,18 @@ services:
     # Override to match your uid:gid, e.g. VISOR_USER=$(id -u):$(id -g)
     user: "${VISOR_USER:-1000:1000}"
     ports:
-      - "8900:8900"
+      - "127.0.0.1:8900:8900"
     # Let modules running in the container reach services on the host
-    # (live-data poll targets, the chat-bridge webhook platform, H200/TTS
-    # endpoints behind the host's gateway) via http://host.docker.internal:.
+    # (live-data poll targets, the chat-bridge webhook platform, LLM/TTS
+    # endpoints behind a host-side gateway) via http://host.docker.internal:.
     # Linux-only knob; harmless elsewhere.
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
-      - ./data:/data
+      # Default is ./data next to the compose file (dev checkout, or the
+      # bundled plugin tree). Override to keep state elsewhere, e.g.
+      # VISOR_DATA_HOST=$HOME/.local/share/visor docker compose up -d.
+      - "${VISOR_DATA_HOST:-./data}:/data"
     environment:
       - VISOR_DATA=/data
       - VISOR_PORT=8900

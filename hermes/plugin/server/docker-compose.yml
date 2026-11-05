@@ -1,0 +1,51 @@
+services:
+  visor:
+    build: .
+    container_name: visor
+    # Run as the host user so the host CLI and the container share ownership of
+    # the ./data volume (avoids PermissionError writing store.json).
+    # Override to match your uid:gid, e.g. VISOR_USER=$(id -u):$(id -g)
+    user: "${VISOR_USER:-1000:1000}"
+    ports:
+      - "127.0.0.1:8900:8900"
+    # Let modules running in the container reach services on the host
+    # (live-data poll targets, the chat-bridge webhook platform, LLM/TTS
+    # endpoints behind a host-side gateway) via http://host.docker.internal:.
+    # Linux-only knob; harmless elsewhere.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Default is ./data next to the compose file (dev checkout, or the
+      # bundled plugin tree). Override to keep state elsewhere, e.g.
+      # VISOR_DATA_HOST=$HOME/.local/share/visor docker compose up -d.
+      - "${VISOR_DATA_HOST:-./data}:/data"
+    environment:
+      - VISOR_DATA=/data
+      - VISOR_PORT=8900
+      # Optional bearer auth: set VISOR_TOKEN to gate /api/* and /media/*.
+      # Leave unset for localhost/LAN open mode. The web UI reads it from
+      # ?token=*** in the URL (EventSource can't set headers).
+      - VISOR_TOKEN=${VISOR_TOKEN:-}
+      # Optional modules (v1.5): comma list from plugins/, e.g. "chat,voice".
+      # Empty = core only. Unknown names are logged and skipped at boot.
+      - VISOR_MODULES=${VISOR_MODULES:-}
+      # Chat bridge (v1.7, chat module only): the Hermes webhook route it
+      # posts to + the route's HMAC secret. Leave unset to run the card in
+      # "not configured" mode. The prompt the agent runs should tell it to
+      # push replies back with visor_push, data.reply_tag="agent" (or
+      # VISOR_CHAT_REPLY).
+      - VISOR_CHAT_URL=${VISOR_CHAT_URL:-}
+      - VISOR_CHAT_SECRET=${VISOR_CHAT_SECRET:-}
+      - VISOR_CHAT_REPLY=${VISOR_CHAT_REPLY:-agent}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8900/api/health', timeout=2).status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    # Keep the container alive while the server crash-loops at startup (e.g.
+    # the data volume is root-owned and unreadable by the container user) so
+    # `docker logs` shows the real traceback instead of an unexplained
+    # connection reset.
+    init: true
+    restart: unless-stopped

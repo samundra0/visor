@@ -6,6 +6,16 @@ on:
   pull_request:
 
 jobs:
+  # Bundle integrity (v1.8): the Hermes plugin ships its own server copy at
+  # hermes/plugin/server/ — fail the build if it drifts from the root tree.
+  bundle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Bundle drift check
+        run: python3 scripts/bundle.py --check
+
   smoke:
     runs-on: ubuntu-latest
     steps:

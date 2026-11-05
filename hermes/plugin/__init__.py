@@ -4,8 +4,17 @@ Registers the ``visor_push`` tool: push blocks (sections, markdown findings,
 todos, tables, stats, code, images, raw HTML) to a holographic infinite-canvas
 webpage. Blocks appear/update in place over SSE — the page is never rewritten.
 
-The server (~/code/holo/server.py, port 8900) is auto-started on first use if
-down, so the tool is always usable without setup.
+The server (port 8900) is auto-started on first use if down, so the tool is
+always usable without setup:
+
+- v1.8+ ships its own server copy in ``hermes/plugin/server/`` — a catalog
+  install is turnkey. State lives in ``~/.local/share/visor`` (override with
+  ``VISOR_DATA``); nothing is written inside the plugin tree.
+- Legacy/dev layout: set ``VISOR_HOME`` to a visor repo clone (server.py at
+  the repo root, state in ``<repo>/data``) — pre-v1.8 behaviour.
+
+Bare-python start is the default; ``VISOR_DOCKER=1`` opts into the Docker
+container (compose file, bundled or legacy tree).
 """
 
 from __future__ import annotations
@@ -25,14 +34,28 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-ROOT = Path(os.environ.get("VISOR_HOME") or (Path.home() / "code" / "visor"))
+# Two layouts:
+#   legacy/dev (VISOR_HOME set) — a visor repo clone: server.py at the repo
+#       root, state in <repo>/data. Pre-v1.8 behaviour, unchanged.
+#   bundle (default, v1.8+) — the plugin ships its own server copy in
+#       hermes/plugin/server/; state goes to ~/.local/share/visor (or
+#       $VISOR_DATA) so nothing is written inside the plugin tree.
+BUNDLE_SERVER = Path(__file__).resolve().parent / "server"
+_LEGACY_HOME = os.environ.get("VISOR_HOME", "").strip()
+BUNDLED = not _LEGACY_HOME
+ROOT = Path(_LEGACY_HOME) if _LEGACY_HOME else BUNDLE_SERVER
 PORT = int(os.environ.get("VISOR_PORT", "8900"))
 BASE = f"http://127.0.0.1:{PORT}"
 _PUBLIC = f"http://localhost:{PORT}"
 # Match the server's VISOR_TOKEN (if set) so the plugin works against an
 # authenticated visor.
 TOKEN = os.environ.get("VISOR_TOKEN", "").strip()
-MEDIA = ROOT / "data" / "media"
+if BUNDLED:
+    DATA_DIR = Path(os.environ.get("VISOR_DATA")
+                    or (Path.home() / ".local" / "share" / "visor"))
+else:
+    DATA_DIR = ROOT / "data"
+MEDIA = DATA_DIR / "media"
 SERVER = ROOT / "server.py"
 COMPOSE = ROOT / "docker-compose.yml"
 
@@ -194,28 +217,61 @@ def _docker_start() -> None:
         raise RuntimeError(f"docker start visor failed: {r.stderr.strip() or r.stdout.strip()}")
 
 
+def _modules_env() -> str:
+    """VISOR_MODULES for a bare start: user's env wins; the bundle defaults
+    to the production modules (live, chat). Legacy keeps core-only unless set."""
+    env = os.environ.get("VISOR_MODULES", "").strip()
+    return env if env else ("live,chat" if BUNDLED else "")
+
+
 def _bare_start() -> None:
-    """Fallback: run server.py directly (no Docker)."""
-    MEDIA.mkdir(exist_ok=True)
-    log = open(ROOT / "visor.log", "ab")
+    """Run server.py directly (no Docker) — the default start path."""
+    MEDIA.mkdir(parents=True, exist_ok=True)
+    log = open(DATA_DIR / "visor.log", "ab")
+    env = {**os.environ,
+           "VISOR_PORT": str(PORT),
+           "HOLO_PORT": str(PORT),
+           "VISOR_MODULES": _modules_env()}
+    if BUNDLED:
+        # Legacy leaves VISOR_DATA alone — the server's own ROOT/data default
+        # is the repo's data dir (pre-v1.8 behaviour).
+        env["VISOR_DATA"] = str(DATA_DIR)
     subprocess.Popen(
         [sys.executable, str(SERVER)], cwd=str(ROOT),
-        env={**os.environ, "VISOR_PORT": str(PORT), "HOLO_PORT": str(PORT)},
-        stdout=log, stderr=log, start_new_session=True,
+        env=env, stdout=log, stderr=log, start_new_session=True,
     )
+
+
+def _docker_compose_up() -> None:
+    """Start/recreate the container from the compose file in ROOT."""
+    r = subprocess.run(["docker", "compose", "up", "-d"], cwd=str(ROOT),
+                       capture_output=True, text=True, timeout=300)
+    if r.returncode != 0:
+        raise RuntimeError(f"docker compose up failed: {r.stderr.strip() or r.stdout.strip()}")
 
 
 def ensure_server(timeout: float = 20.0) -> None:
     """Auto-start the visor server if it is down. Idempotent.
 
-    Prefers the Docker container (`visor`, restart: unless-stopped — survives
-    reboots). Falls back to a bare python3 process when Docker is unavailable.
+    Order: reachable -> done. ``VISOR_DOCKER=1`` -> docker compose (bundled
+    or legacy tree). Legacy without it: an existing 'visor' container (from a
+    pre-v1.8 setup) is preferred. Everything else: bare python from the tree.
     """
     if _reachable():
         return
     if not SERVER.exists():
-        raise RuntimeError(f"visor server not found at {SERVER}")
-    if _docker_up():
+        raise RuntimeError(
+            f"visor server not found at {SERVER} — reinstall the plugin "
+            "(the bundled server is missing) or point VISOR_HOME at a visor "
+            "repo clone."
+        )
+    if os.environ.get("VISOR_DOCKER") == "1":
+        try:
+            _docker_compose_up()
+        except Exception as e:
+            logger.warning("visor: docker compose up failed (%s); falling back to bare python", e)
+            _bare_start()
+    elif not BUNDLED and _docker_up():
         try:
             _docker_start()
         except Exception as e:

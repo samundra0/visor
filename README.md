@@ -54,7 +54,20 @@ hover — while you do something else.
 
 ## Quick start (you)
 
-Requires: Docker (or just Python 3.9+ for a bare run).
+Two ways in:
+
+**Hermes (turnkey, v1.8+):** if you use Hermes Agent, the catalog plugin
+ships its own server — no clone, no Docker required:
+
+```sh
+hermes plugins install visor
+```
+
+Done — the plugin auto-starts its bundled server on first use (state in
+`~/.local/share/visor/`; `VISOR_DOCKER=1` opts into the Docker container
+instead). Then in any Hermes session: *"show me X on the visor."*
+
+**Dev / direct (Docker or bare Python):**
 
 ```sh
 git clone https://github.com/samundra0/visor.git
@@ -116,16 +129,23 @@ for any agent: [docs/agent-setup.md](docs/agent-setup.md). Note: pushing to a
 board name that doesn't exist yet **auto-creates the board** — no setup step.
 
 For **Hermes Agent** specifically there is a first-class plugin —
-[hermes/](hermes/) — that registers a `visor_push` tool so the agent pushes
-boards without learning the API by hand:
+[hermes/plugin/](hermes/plugin/) — that registers a `visor_push` tool so the
+agent pushes boards without learning the API by hand:
 
 ```sh
-./hermes/install.sh           # copies the plugin into ~/.hermes/plugins/ and enables it
+# catalog (v1.8+): turnkey — the plugin ships its own server copy
+hermes plugins install visor
+
+# dev checkout: install the plugin from this repo
+./hermes/install.sh
+# points the plugin at this checkout (server at the repo root, state in ./data)
+export VISOR_HOME=$(pwd)
 ```
 
 Then in any Hermes session: *"show me X on the visor"* — the agent calls
-`visor_push` and the blocks appear live. The plugin auto-starts the Docker
-container if it's down.
+`visor_push` and the blocks appear live. The plugin auto-starts the server if
+it's down: bundled bare-python (default), `VISOR_DOCKER=1` for the Docker
+container, or an existing `VISOR_HOME` checkout's container.
 
 ### The API in 20 seconds
 
@@ -199,6 +219,9 @@ visor.py         CLI (blocks, boards, links)
 Dockerfile       python:3.12-alpine, stateless (state in ./data volume)
 docker-compose.yml  restart: unless-stopped; VISOR_USER env for your uid:gid
 hermes/          Hermes plugin (visor_push tool, incl. links) + install.sh
+hermes/plugin/server/  bundled server copy shipped with the plugin (v1.8) —
+                 regenerated from the root tree by `python3 scripts/bundle.py`
+                 (CI fails if it drifts: `python3 scripts/bundle.py --check`)
 docs/agent-setup.md  the prompt to give any agent
 docs/design/         historical design notes (e.g. the v1.4 connectors spec)
 scripts/smoke.py end-to-end smoke test against a running :8900
@@ -231,10 +254,12 @@ Environment:
 | `VISOR_DATA` | `./data` (host) / `/data` (container) | store + media dir |
 | `VISOR_PORT` | `8900` | listen port (`HOLO_PORT` accepted as legacy alias) |
 | `VISOR_USER` | `1000:1000` | uid:gid the container runs as (compose) — set this to your own uid:gid if your files aren't owned by 1000 (check with `id -u`/`id -g`), otherwise the server can't write `data/` |
-| `VISOR_HOME` | repo root (parent of `mcp/`) | project root for the Hermes plugin + media staging |
+| `VISOR_HOME` | _(unset = bundled server)_ | **legacy/dev only:** point the Hermes plugin at a visor repo clone (server at the repo root, state in `<repo>/data`). Unset, the plugin uses its bundled server (`hermes/plugin/server/`) with state in `~/.local/share/visor` (or `$VISOR_DATA`). |
+| `VISOR_DOCKER` | _(unset = bare python)_ | Hermes plugin only: `1` = start the server via `docker compose` (bundled or `VISOR_HOME` tree) instead of bare python. |
+| `VISOR_DATA_HOST` | `./data` (compose) | compose only: host side of the `/data` volume mount, e.g. `VISOR_DATA_HOST=$HOME/.local/share/visor docker compose up -d`. |
 | `VISOR_TOKEN` | _(unset = open)_ | optional bearer token. When set, `/api/*` and `/media/*` require `Authorization: Bearer <token>`. Open the UI with `?token=*** (EventSource can't set headers). The CLI, MCP server, and Hermes plugin all read the same var. `/`, the page, and `/api/health` stay open. |
 | `VISOR_MODULES` | _(empty = core only)_ | optional module plugins (v1.5): comma list from `plugins/`, e.g. `selftest,live`. A module adds block types, card renderers, `/api/plugins/<name>/*` endpoints, and may transform pushes before storage. `live` (v1.6) adds auto-refreshing blocks that poll a URL on an interval. Missing/crashing modules are logged and skipped — core still boots. See `docs/design/plugins-v1.5.md`. |
-| `VISOR_LIVE_LOCAL_HOSTS` | _(empty = all hosts)_ | `live` module only: comma-list of allowed poll-target hosts (names or IPs). Empty allows everything (fine for a personal canvas on a trusted network); set e.g. `10.0.0.5,aigateway.local` for networked installs. Fetches stay http(s)-only, 10s timeout, 1MB cap. |
+| `VISOR_LIVE_LOCAL_HOSTS` | _(empty = all hosts)_ | `live` module only: comma-list of allowed poll-target hosts (names or IPs). Empty allows everything (fine for a personal canvas on a trusted network); set e.g. `10.0.0.5,192.168.1.50` for networked installs. Fetches stay http(s)-only, 10s timeout, 1MB cap. |
 | `VISOR_CHAT_URL` | _(unset)_ | `chat` module only: the Hermes webhook route to POST user messages to, e.g. `http://host.docker.internal:8645/webhooks/visor-chat`. Set together with `VISOR_CHAT_SECRET`; unset = the card runs in "bridge not configured" mode. |
 | `VISOR_CHAT_SECRET` | _(unset)_ | `chat` module only: the route's HMAC secret (from `hermes webhook list`). Messages are signed Standard/generic-V2: `X-Webhook-Timestamp` + `X-Webhook-Signature-V2` = hex HMAC-SHA256 of `<ts>.<body>`. |
 | `VISOR_CHAT_REPLY` | `agent` | `chat` module only: the `reply_tag` string the agent sets on its reply blocks. The card tracks the latest `reply_tag` block's ts on the board to clear its waiting state. |

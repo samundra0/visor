@@ -174,6 +174,14 @@ def route(method, sub_path, query, body, send):
         block_id = str(body.get("block", ""))
         url, secret, tag = _cfg()
         if not (url and secret):
+            # Unconfigured: the attempt still lands in the transcript (the
+            # card shows the user tried; the hint is in the response), so
+            # record the user line before returning.
+            rec = _rec(block_id)
+            with _lock:
+                rec["transcript"].append({"who": "user", "text": msg, "ts": time.time()})
+                rec["transcript"] = rec["transcript"][-TRANSCRIPT_CAP:]
+            _persist()
             send(200, {"sent": False, "reason": "bridge not configured (VISOR_CHAT_URL + VISOR_CHAT_SECRET)"})
             return
         mid = uuid.uuid4().hex[:8]
