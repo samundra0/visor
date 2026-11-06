@@ -40,6 +40,13 @@ All notable changes to Visor. Format loosely follows
 - **Docs.** README env table + design notes updated to the v1.9 defaults.
   CI smoke/health probes updated for the always-on token (open `/api/health`
   probe; the smoke test resolves `data/visor-token`).
+- **Docker path (post-CI).** The image binds `0.0.0.0` inside the
+  container (Docker port mappings can't reach a container-loopback
+  listener) via `VISOR_HOST` in the Dockerfile, and `entrypoint.sh`
+  (shipped in the bundle too) exports the per-install token — reused from
+  `/data/visor-token` or created 0600 — so the server's non-loopback
+  startup check passes with an explicit `VISOR_TOKEN`. Host exposure
+  stays loopback-only via the compose mapping `127.0.0.1:8900`.
 
 ## [1.8.0] — 2026-11-05
 

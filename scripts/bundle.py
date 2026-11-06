@@ -23,7 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BUNDLE = ROOT / "hermes" / "plugin" / "server"
 
-FILES = ["server.py", "index.html", "Dockerfile", "docker-compose.yml"]
+FILES = ["server.py", "index.html", "Dockerfile", "docker-compose.yml", "entrypoint.sh"]
 DIRS = ["plugins"]
 
 EXCLUDE = ("__pycache__", ".pyc")
