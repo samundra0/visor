@@ -257,7 +257,8 @@ Environment:
 | `VISOR_HOME` | _(unset = bundled server)_ | **legacy/dev only:** point the Hermes plugin at a visor repo clone (server at the repo root, state in `<repo>/data`). Unset, the plugin uses its bundled server (`hermes/plugin/server/`) with state in `~/.local/share/visor` (or `$VISOR_DATA`). |
 | `VISOR_DOCKER` | _(unset = bare python)_ | Hermes plugin only: `1` = start the server via `docker compose` (bundled or `VISOR_HOME` tree) instead of bare python. |
 | `VISOR_DATA_HOST` | `./data` (compose) | compose only: host side of the `/data` volume mount, e.g. `VISOR_DATA_HOST=$HOME/.local/share/visor docker compose up -d`. |
-| `VISOR_TOKEN` | _(unset = open)_ | optional bearer token. When set, `/api/*` and `/media/*` require `Authorization: Bearer <token>`. Open the UI with `?token=*** (EventSource can't set headers). The CLI, MCP server, and Hermes plugin all read the same var. `/`, the page, and `/api/health` stay open. |
+| `VISOR_TOKEN` | _(generated per install)_ | v1.9: a per-install token is **generated on first start** and stored 0600 at `<data>/visor-token`, so `/api/*` and `/media/*` are always gated. Set the var to pin your own. The web UI gets its token injected by the server (open the page, done); CLI, MCP, and the Hermes plugin read the file automatically. `?token=*** in the URL still works (EventSource can't set headers). `/`, the page, and `/api/health` stay open. |
+| `VISOR_HOST` | `127.0.0.1` | v1.9: bind address. Loopback by default. A non-loopback value (LAN exposure) requires a token — the server refuses to start without one, and its origin gate accepts `http://<host>:<port>` in addition to the loopback origins. |
 | `VISOR_MODULES` | _(empty = core only)_ | optional module plugins (v1.5): comma list from `plugins/`, e.g. `selftest,live`. A module adds block types, card renderers, `/api/plugins/<name>/*` endpoints, and may transform pushes before storage. `live` (v1.6) adds auto-refreshing blocks that poll a URL on an interval. Missing/crashing modules are logged and skipped — core still boots. See `docs/design/plugins-v1.5.md`. |
 | `VISOR_LIVE_LOCAL_HOSTS` | _(empty = all hosts)_ | `live` module only: comma-list of allowed poll-target hosts (names or IPs). Empty allows everything (fine for a personal canvas on a trusted network); set e.g. `10.0.0.5,192.168.1.50` for networked installs. Fetches stay http(s)-only, 10s timeout, 1MB cap. |
 | `VISOR_CHAT_URL` | _(unset)_ | `chat` module only: the Hermes webhook route to POST user messages to, e.g. `http://host.docker.internal:8645/webhooks/visor-chat`. Set together with `VISOR_CHAT_SECRET`; unset = the card runs in "bridge not configured" mode. |
@@ -319,9 +320,13 @@ Notes:
   diff: content change → rebuild that card; position change → move it;
   otherwise no-op).
 - **Single user, one process.** One store file, written atomically under a
-  lock. Concurrency beyond a few clients is not the design goal. **Optional
-  bearer auth** (`VISOR_TOKEN`) lets you run it on a public VPS instead of
-  LAN; unset = open, the default for localhost.
+  lock. Concurrency beyond a few clients is not the design goal. **Auth is
+  on by default** (v1.9): a per-install token (generated, 0600, in the data
+  dir) gates `/api/*` and `/media/*`, and the server binds `127.0.0.1`
+  unless `VISOR_HOST` opts in to a non-loopback bind — which itself requires
+  a token. Cross-origin requests (any other site's browser context) are
+  rejected on the data routes, and writes must carry
+  `Content-Type: application/json`.
 - **Block types are a closed set.** Core accepts `section, text, todo, table,
   stat, chart, code, image, audio, video, html` — anything else 400s on
   POST/PATCH (the MCP server and Hermes plugin validate the same set, extended
@@ -330,9 +335,12 @@ Notes:
 - **Media is copied, not streamed from your paths.** The plugin/CLI stage files
   into `data/media/` (the page can't read arbitrary local paths). URLs pass
   through untouched.
-- **Raw `html` blocks are trusted** — same origin as the canvas. Use them for
-  layouts the typed blocks can't express (and the agent should prefer typed
-  blocks otherwise).
+- **Raw `html` blocks are sandboxed** (v1.9): they render in a sandboxed
+  iframe (opaque origin — the agent's markup can't touch the canvas page's
+  DOM or its token) with a small `window.visor` postMessage bridge
+  (`window.visor.board`, `window.visor.api(path, method, body)` — token
+  handled by the parent). Use them for layouts the typed blocks can't
+  express (and the agent should prefer typed blocks otherwise).
 
 ## License
 

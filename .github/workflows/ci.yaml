@@ -52,11 +52,14 @@ jobs:
           # bind-mount (created by git checkout) is writable by the server
           export VISOR_USER="$(id -u):$(id -g)"
           docker compose up -d
+          # /api/health is the open probe (v1.9: everything else under
+          # /api/* is token-gated; the container generated data/visor-token
+          # on first start and the smoke test reads it back)
           for i in $(seq 1 30); do
-            curl -sf http://localhost:8900/api/boards >/dev/null && break
+            curl -sf http://localhost:8900/api/health >/dev/null && break
             sleep 1
           done
-          curl -sf http://localhost:8900/api/boards
+          curl -sf http://localhost:8900/api/health
 
       - name: Smoke test
         run: python3 scripts/smoke.py
@@ -81,8 +84,9 @@ jobs:
           export VISOR_USER="$(id -u):$(id -g)"
           docker rm -f visor >/dev/null 2>&1 || true
           VISOR_MODULES=selftest,live,chat docker compose up -d
+          # open health probe (v1.9: data routes are token-gated)
           for i in $(seq 1 30); do
-            curl -sf http://localhost:8900/api/boards >/dev/null && break
+            curl -sf http://localhost:8900/api/health >/dev/null && break
             sleep 1
           done
           docker logs visor 2>&1 | grep -E "module|visor:" || true

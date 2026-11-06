@@ -190,6 +190,10 @@ pre.code .lang{display:block;font-size:9.5px;font-weight:700;letter-spacing:.12e
 .empty div{text-align:center;color:var(--faint)}
 .empty .b{font-size:15px;font-weight:800;letter-spacing:.3em;text-transform:uppercase;color:var(--dim)}
 .empty .w{font-size:12.5px;margin-top:6px}
+/* v1.9: raw-html cards run in a sandboxed iframe (opaque origin) so agent
+   markup can't reach the canvas page's DOM or token. Fixed viewport inside
+   the card with internal scroll — the card keeps a stable layout height. */
+.rawframe{width:100%;height:300px;border:0;display:block;background:transparent}
 </style>
 </head>
 <body>
@@ -229,11 +233,20 @@ pre.code .lang{display:block;font-size:9.5px;font-weight:700;letter-spacing:.12e
 "use strict";
 const world = document.getElementById('world');
 
+/* Injected by the server (v1.9): the per-install API token. The page loads
+   from visor's own origin, so the server fills __VISOR_TOKEN__ with the
+   generated token (data/visor-token) on every response. Static/file opens
+   keep it empty — open with ?token=<value> instead. */
+window.VISOR_TOKEN = "__VISOR_TOKEN__";
+
 /* Optional auth (matches the server's VISOR_TOKEN): open the page with
    ?token=<value> — the token is then sent on every API call (fetch + SSE)
-   via the Authorization header. Without it, an authenticated server 401s. */
+   via the Authorization header. The server-injected window.VISOR_TOKEN
+   (v1.9) is the default; an explicit ?token=*** query wins. */
 const TOKEN = (() => {
-  try { return new URLSearchParams(location.search).get('token') || ''; } catch { return ''; }
+  let q = '';
+  try { q = new URLSearchParams(location.search).get('token') || ''; } catch {}
+  return q || (window.VISOR_TOKEN || '');
 })();
 const _fetch = window.fetch.bind(window);
 window.fetch = (url, opts = {}) => {
@@ -271,6 +284,44 @@ const lktmp = document.getElementById('lktmp');
 const CHART_COLORS = ['#4f46e5','#0ea5e9','#f59e0b','#16a34a','#dc2626','#8b5cf6','#0d9488','#db2777'];
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* v1.9: bridge appended to every raw-html card (inside the sandboxed
+   iframe). Opaque-origin iframes can't touch the parent page, so they get
+   a minimal postMessage API instead: window.visor.board (the card's board)
+   and window.visor.api(path, method?, body?) — a proxy to the visor API
+   (token handled by the parent; the card itself never sees the token). */
+const HTML_BRIDGE = `<scr` + `ipt>
+(function(){
+  var n = 0, wait = {};
+  window.visor = {
+    board: '',
+    api: function(path, method, body){
+      method = method || 'GET';
+      return new Promise(function(res){
+        var id = 'v' + (++n);
+        wait[id] = function(m){ res({ok: m.ok, status: m.status, json: m.json, error: m.error}); };
+        window.parent.postMessage({t: 'visor-bridge', cmd: 'api', id: id,
+          path: path, method: method, body: body || null}, '*');
+      });
+    }
+  };
+  window.addEventListener('message', function(e){
+    var m = e.data;
+    if (!m || m.t !== 'visor-bridge') return;
+    if (m.cmd === 'board') { window.visor.board = m.board || ''; }
+    else if (m.cmd === 'res' && wait[m.id]) { wait[m.id](m); delete wait[m.id]; }
+  });
+})();
+</scr` + `ipt>`;
+
+function announceBoard(){
+  // Tell every raw-html iframe which board it belongs to (re-sent on board
+  // switches and after card (re)creation).
+  document.querySelectorAll('iframe.rawframe').forEach(f => {
+    try { f.contentWindow && f.contentWindow.postMessage(
+      {t: 'visor-bridge', cmd: 'board', board: currentBoard}, '*'); } catch {}
+  });
+}
 
 function md(src){
   let s = esc(src);
@@ -439,8 +490,13 @@ function bodyHTML(b){
       return `<pre class="code">${d.lang?`<span class="lang">${esc(d.lang)}</span>`:''}<code>${esc(d.code||'')}</code></pre>`;
     case 'image':
       return `<div class="imgblk"><img src="${esc(d.src||'')}" alt="">${d.caption?`<div class="cap">${esc(d.caption)}</div>`:''}</div>`;
-    case 'html':
-      return `<div class="raw">${d.html||''}</div>`;
+    case 'html': {
+      /* v1.9: agent-supplied markup runs in a sandboxed iframe (opaque
+         origin, no DOM access to the canvas page) instead of executing in
+         the page itself. A small window.visor bridge (postMessage) exposes
+         the card its board id and a token-scoped API proxy. */
+      return `<div class="raw"><iframe class="rawframe" sandbox="allow-scripts allow-popups" srcdoc="${esc((d.html || '') + HTML_BRIDGE)}"></iframe></div>`;
+    }
     default: {
       // Plugin module card types (v1.5): a loaded module claims a block type
       // and provides its own renderer. Unknown non-module types fall through
@@ -543,8 +599,12 @@ function playSeq(cid, start){
 function rerunScripts(scope){
   // innerHTML insertion parses <script> but never executes it — re-run them so
   // agent-pushed html blocks (interactive mocks, live visualizations) and
-  // module-rendered cards (v1.5) actually work.
+  // module-rendered cards (v1.5) actually work. v1.9: raw-html cards now
+  // live in a sandboxed iframe (see bodyHTML's 'html' case) — their scripts
+  // run on iframe load, and only inline <script> from other card types is
+  // re-run here.
   scope.querySelectorAll('script').forEach(s => {
+    if (s.closest('iframe')) return;
     const n = document.createElement('script');
     n.textContent = s.textContent;
     s.replaceWith(n);
@@ -559,6 +619,7 @@ function swapBody(el, b){
   const bd = el.querySelector('.bd');
   if (bd) bd.innerHTML = bodyHTML(b);
   rerunScripts(el);
+  el.querySelectorAll('iframe.rawframe').forEach(f => f.addEventListener('load', () => announceBoard()));
   el.querySelectorAll('.todo li').forEach(li => li.addEventListener('click', () => {
     const i = +li.dataset.i; const it = blocks.get(b.id)?.meta.data?.items?.[i];
     if (!it) return;
@@ -582,6 +643,7 @@ function makeEl(b){
     (b.type==='section' ? '' : `<div class="bar"><span class="tag">${esc(b.type)}</span><span class="ttl">${esc(b.title||'')}</span><span class="wbtn" title="toggle wide card">${(b.w||1)>=2 ? '⟨⟩' : '⟩⟨'}</span><span class="x" title="remove">✕</span></div>`) +
     `<div class="bd">${bodyHTML(b)}</div>`;
   rerunScripts(el.querySelector('.bd'));
+  el.querySelectorAll('iframe.rawframe').forEach(f => f.addEventListener('load', () => announceBoard()));
   el.querySelector('.bar')?.addEventListener('pointerdown', e => startDrag(e, el, b.id));
   el.querySelector('.x')?.addEventListener('click', e => { e.stopPropagation(); apiDel(b.id); });
   const wb = el.querySelector('.wbtn');
@@ -1263,6 +1325,22 @@ function switchBoard(bid){
 }
 
 /* ================= server comms ================= */
+/* v1.9: serve raw-html cards' window.visor.api proxy (postMessage bridge).
+   The card never sees the token — the parent does the fetch with its own
+   Authorization header. Only answers messages from our own iframes. */
+window.addEventListener('message', e => {
+  const m = e.data;
+  if (!m || m.t !== 'visor-bridge' || m.cmd !== 'api' || !e.source) return;
+  const done = (ok, status, j, err) =>
+    e.source.postMessage({t: 'visor-bridge', cmd: 'res', id: m.id,
+      ok, status, json: j, error: err}, '*');
+  const hdrs = {'Content-Type': 'application/json'};
+  if (TOKEN) hdrs['Authorization'] = 'Bearer ' + TOKEN;
+  fetch(m.path || '/', {method: m.method || 'GET', headers: hdrs,
+    body: m.body != null ? (typeof m.body === 'string' ? m.body : JSON.stringify(m.body)) : undefined})
+    .then(async r => { let j = null; try { j = await r.json(); } catch {} done(r.ok, r.status, j, null); })
+    .catch(err => done(false, 0, null, String(err)));
+});
 let es = null;
 let bootTimer = 0;
 function refreshEmpty(){

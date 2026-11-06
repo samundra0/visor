@@ -3,6 +3,44 @@
 All notable changes to Visor. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/).
 
+## [1.9.0] — 2026-11-05
+
+- **Security defaults (catalog review).** The default setup no longer exposes
+  an open canvas on the machine:
+  - **Loopback bind by default.** The server binds `127.0.0.1` (was
+    `0.0.0.0`). New `VISOR_HOST` opts in to a non-loopback bind — refused at
+    startup unless a token is set.
+  - **Per-install token by default.** On first start the server generates a
+    token, stored 0600 at `<data>/visor-token` (stable across restarts).
+    `/api/*` and `/media/*` (incl. SSE + the chat-bridge routes) are now
+    always gated. An explicit `VISOR_TOKEN` env var wins over the file. The
+    web UI gets its token **injected by the server** into the page (no
+    `?token=*** query needed; the CLI, MCP server, and Hermes plugin read
+    the file automatically. `/`, the page, and `/api/health` stay open.
+  - **No wildcard CORS.** `Access-Control-Allow-Origin: *` is gone:
+    responses echo the request origin only when it is visor's own
+    `localhost/127.0.0.1:<port>` (or `VISOR_HOST:<port>`), and data routes
+    reject cross-origin requests with 403 before auth. Writes
+    (POST/PATCH with a body) require `Content-Type: application/json`
+    (415 otherwise).
+  - **Hardened media staging** (plugin + MCP): a local `src` is only copied
+    into the served media dir when it is a regular file with an
+    image/audio/video suffix (checked on the path as given AND after
+    symlink resolution) and no dotfile path component — `~/.ssh/id_rsa`,
+    `~/.hermes/.env`, and friends no longer end up in `/media/`.
+  - **Profile-scoped secrets.** The plugin resolves `VISOR_TOKEN` /
+    `VISOR_CHAT_SECRET` (and the other declared vars) through
+    `agent.secret_scope.get_secret` with an `os.environ` fallback, and
+    passes them explicitly to the server child (bare python and compose).
+    All five vars are declared in `plugin.yaml` (`requires_env`).
+- **Sandboxed `html` cards (recommended item).** Raw-HTML blocks now render
+  in a sandboxed iframe (opaque origin) instead of executing in the page
+  itself. A small `window.visor` postMessage bridge gives the card its board
+  id and a token-scoped API proxy (`window.visor.api(path, method, body)`).
+- **Docs.** README env table + design notes updated to the v1.9 defaults.
+  CI smoke/health probes updated for the always-on token (open `/api/health`
+  probe; the smoke test resolves `data/visor-token`).
+
 ## [1.8.0] — 2026-11-05
 
 - **Self-contained plugin (catalog turnkey).** `hermes/plugin/` now ships its

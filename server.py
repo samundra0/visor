@@ -23,6 +23,7 @@ import mimetypes
 import os
 import queue
 import re
+import secrets
 import sys
 import threading
 import time
@@ -39,9 +40,14 @@ os.makedirs(os.path.join(DATA_DIR, "media"), exist_ok=True)
 STORE = os.path.join(DATA_DIR, "store.json")
 MEDIA_DIR = os.path.join(DATA_DIR, "media")
 PORT = int(os.environ.get("VISOR_PORT", os.environ.get("HOLO_PORT", "8900")))
-# Optional bearer auth: set VISOR_TOKEN to require `Authorization: Bearer <token>`
-# on all /api/* and /media/* requests. Unset = open (localhost/LAN use).
+# Bind address: loopback by default (v1.9). A VISOR_HOST other than 127.0.0.1/::1
+# (LAN exposure) requires a token — main() refuses to start without one.
+HOST = os.environ.get("VISOR_HOST", "127.0.0.1").strip() or "127.0.0.1"
+# Bearer auth. Default (v1.9): a per-install token generated on first start,
+# stored 0600 at <data>/visor-token, so /api/* and /media/* are never open.
+# An explicit VISOR_TOKEN env var wins over the generated file.
 TOKEN = os.environ.get("VISOR_TOKEN", "").strip()
+TOKEN_FILE = os.path.join(DATA_DIR, "visor-token")
 
 LOCK = threading.Lock()
 SSE_SUBS = []
@@ -280,12 +286,30 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
 
+    # ---- origin policy (v1.9) ----
+    # The page is only ever served from visor's own origin(s). Cross-origin
+    # requests (any other site the user visits) are rejected on the data
+    # routes instead of leaking a wildcard CORS header.
+    def _allowed_origins(self):
+        hosts = {"127.0.0.1", "localhost"}
+        if HOST not in ("127.0.0.1", "::1"):
+            hosts.add(HOST)
+        return {f"http://{h}:{PORT}" for h in hosts}
+
+    def _origin_ok(self, origin):
+        return (origin or "").strip() in self._allowed_origins()
+
     def _send(self, code, body, ctype="application/json"):
         data = body if isinstance(body, bytes) else json.dumps(body).encode()
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin", "")
+        if origin and self._origin_ok(origin):
+            # Echo the request origin (never a wildcard — v1.9). No Origin
+            # header (same-origin page, CLI, curl): no CORS headers needed.
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.end_headers()
         self.wfile.write(data)
 
@@ -329,22 +353,51 @@ class Handler(BaseHTTPRequestHandler):
         q = parse_qs(urlparse(self.path).query)
         return (q.get("token") or [""])[0] == TOKEN
 
+    def _origin_gate(self):
+        """v1.9: reject cross-origin data requests BEFORE auth so a foreign
+        site gets a clean 403 (no 401 token probing, no wildcard CORS).
+        No Origin header = same-origin/CLI/curl — always fine."""
+        origin = self.headers.get("Origin", "")
+        if origin and not self._origin_ok(origin):
+            self._send(403, {"error": f"cross-origin request rejected "
+                                       f"(allowed origins: {', '.join(sorted(self._allowed_origins()))})"})
+            return True
+        return False
+
     def _need_auth(self):
         """Gate for /api/* and /media/*. Returns True (and has sent 401) when
-        the request should stop here. Only meaningful when VISOR_TOKEN is set."""
+        the request should stop here. v1.9: a token is always set (generated
+        per install if VISOR_TOKEN is unset), so this always gates."""
         if self._authed():
             return False
-        self._send(401, {"error": "unauthorized (set Authorization: Bearer <VISOR_TOKEN>)"})
+        self._send(401, {"error": "unauthorized (Authorization: Bearer <token>, or ?token=<token> for SSE)"})
         return True
 
+    def _check_write_ctype(self):
+        """v1.9: writes carry a JSON body with Content-Type: application/json
+        required — a foreign page posting form-encoded/fetch-default bodies
+        dies with 415. Empty-body writes (POST /api/clear {}) are exempt."""
+        try:
+            n = int(self.headers.get("Content-Length", 0) or 0)
+        except (TypeError, ValueError):
+            n = 0
+        if n <= 0:
+            return False
+        ct = (self.headers.get("Content-Type") or "").lower()
+        if "application/json" not in ct:
+            self._send(415, {"error": "writes require Content-Type: application/json"})
+            return True
+        return False
+
     def do_OPTIONS(self):
-        # CORS preflight. Without this a browser cross-origin write dies with
-        # 501 (BaseHTTPRequestHandler has no default). Responses already carry
-        # Access-Control-Allow-Origin: *, so answering preflight lets same-origin
-        # and explicitly-permitted origins actually write.
+        # CORS preflight. v1.9: answer only for allowed origins (echoed, never
+        # a wildcard); an unlisted origin gets 204 without ACAO, so the
+        # browser blocks the actual request.
         origin = self.headers.get("Origin", "")
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", origin or "*")
+        if origin and self._origin_ok(origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods",
                          "GET, POST, PATCH, DELETE, OPTIONS")
         self.send_header("Access-Control-Allow-Headers",
@@ -387,7 +440,14 @@ class Handler(BaseHTTPRequestHandler):
         u = urlparse(self.path)
         if u.path in ("/", "/index.html"):
             with open(os.path.join(ROOT, "index.html"), "rb") as f:
-                self._send(200, f.read(), "text/html; charset=utf-8")
+                html = f.read()
+            # v1.9: hand the page its own API token so the client never needs
+            # ?token=*** (the page is only ever served from visor's own
+            # origin; cross-origin readers are rejected by the origin gate).
+            if TOKEN:
+                html = html.replace(b'window.VISOR_TOKEN = "__VISOR_TOKEN__";',
+                                    b'window.VISOR_TOKEN = "' + TOKEN.encode("utf-8") + b'";')
+            self._send(200, html, "text/html; charset=utf-8")
         elif u.path == "/api/health":
             # Open (no auth) so compose healthchecks and agents can probe
             # readiness without a token or parsing the board list.
@@ -409,6 +469,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._send(200, js.encode(), "application/javascript; charset=utf-8")
                     return
             self._send(404, {"error": "not found"})
+        elif self._origin_gate():
+            return
         elif self._need_auth():
             return
         elif u.path.startswith("/api/plugins/"):
@@ -466,7 +528,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         u = urlparse(self.path)
+        if self._origin_gate():
+            return
         if self._need_auth():
+            return
+        if self._check_write_ctype():
             return
         if u.path.startswith("/api/plugins/"):
             body = self._body()
@@ -615,7 +681,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_PATCH(self):
         u = urlparse(self.path)
+        if self._origin_gate():
+            return
         if self._need_auth():
+            return
+        if self._check_write_ctype():
             return
         if u.path.startswith("/api/plugins/"):
             body = self._body()
@@ -722,6 +792,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self):
         u = urlparse(self.path)
+        if self._origin_gate():
+            return
         if self._need_auth():
             return
         lm = re.match(r"^/api/links/([\w-]+)$", u.path)
@@ -789,12 +861,55 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, {"ok": True})
 
 
+def _ensure_token():
+    """v1.9: guarantee a token. Returns a label for the startup log:
+    "env" (VISOR_TOKEN set), "file" (reusing <data>/visor-token), or
+    "generated" (fresh per-install token, written 0600)."""
+    global TOKEN
+    if TOKEN:
+        return "env"
+    try:
+        with open(TOKEN_FILE) as f:
+            existing = f.read().strip()
+        if existing:
+            TOKEN = existing
+            return "file"
+    except (FileNotFoundError, OSError):
+        pass
+    TOKEN = secrets.token_urlsafe(24)
+    with open(TOKEN_FILE, "w") as f:
+        f.write(TOKEN + "\n")
+    try:
+        os.chmod(TOKEN_FILE, 0o600)
+    except OSError:
+        pass
+    return "generated"
+
+
 def main():
     load_modules()
-    srv = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+    global TOKEN
+    # v1.9 (catalog review): non-loopback binds (VISOR_HOST opt-in) are
+    # refused unless an EXPLICIT VISOR_TOKEN is set — never an open canvas;
+    # loopback binds get a generated per-install token automatically.
+    if HOST not in ("127.0.0.1", "::1") \
+            and not os.environ.get("VISOR_TOKEN", "").strip():
+        print(f"visor: refusing to bind {HOST!r} (non-loopback) without a "
+              "token — VISOR_HOST opt-in requires VISOR_TOKEN "
+              "(loopback binds generate one automatically)", file=sys.stderr)
+        sys.exit(2)
+    src = _ensure_token()
+    srv = ThreadingHTTPServer((HOST, PORT), Handler)
     srv.daemon_threads = True
     mods = ", ".join(MODULES) if MODULES else "none"
-    print(f"visor: http://localhost:{PORT}  (store: {STORE}, modules: {mods})", flush=True)
+    addr = HOST if HOST != "0.0.0.0" else "all interfaces"
+    print(f"visor: http://localhost:{PORT}  (bind {addr}, store: {STORE}, modules: {mods})", flush=True)
+    if src == "generated":
+        print(f"visor: generated a per-install token at {TOKEN_FILE} (0600) — pass it as "
+              "Authorization: Bearer <token> or ?token=<token> for SSE", flush=True)
+    else:
+        print(f"visor: auth on (token via {src}); pass it as Authorization: Bearer <token> "
+              "or ?token=<token> for SSE", flush=True)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

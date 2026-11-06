@@ -7,21 +7,51 @@ Usage:
   python3 scripts/smoke.py --with-modules selftest
       # additionally asserts the plugin paths work end-to-end (server must
       # have run with VISOR_MODULES including selftest)
+  python3 scripts/smoke.py --token T | --token-file PATH
+      # v1.9 servers always carry a token; the default resolution reads
+      # $VISOR_TOKEN, then ./data/visor-token (the generated file).
 """
-import argparse, json, urllib.request, urllib.parse
+import argparse, json, os, urllib.request, urllib.parse
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--base", default="http://127.0.0.1:8900")
 ap.add_argument("--with-modules", default="",
                 help="comma list of modules to assert plugin cases for")
+ap.add_argument("--token", default="",
+                help="bearer token (v1.9: servers always carry one)")
+ap.add_argument("--token-file", default="",
+                help="read the token from a file (default: ./data/visor-token)")
 ARGS = ap.parse_args()
 BASE = ARGS.base.rstrip("/")
 WITH_MODULES = [m for m in ARGS.with_modules.split(",") if m]
 
+
+def _resolve_token():
+    if ARGS.token:
+        return ARGS.token.strip()
+    env = os.environ.get("VISOR_TOKEN", "").strip()
+    if env:
+        return env
+    p = ARGS.token_file or "data/visor-token"
+    try:
+        with open(p) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+TOKEN = _resolve_token()
+if TOKEN:
+    print("token: (set, " + TOKEN[:6] + "…)")
+
+
 def call(method, path, obj=None):
     data = json.dumps(obj).encode() if obj is not None else None
+    headers = {"Content-Type": "application/json"} if data else {}
+    if TOKEN:
+        headers["Authorization"] = f"Bearer {TOKEN}"
     req = urllib.request.Request(BASE + path, data=data,
-        headers={"Content-Type": "application/json"} if data else {}, method=method)
+        headers=headers, method=method)
     return json.loads(urllib.request.urlopen(req).read())
 
 # create board
@@ -53,12 +83,16 @@ page = urllib.request.urlopen(BASE + "/").read().decode()
 assert "VISOR" in page
 print("page OK")
 
-# SSE stream reachable (host/port from --base, not hardcoded)
+# SSE stream reachable (host/port from --base, not hardcoded). v1.9: the
+# stream is auth-gated like the rest of /api/* — send the token if set.
 import socket
 from urllib.parse import urlparse as _up
 _h, _p = _up(BASE).hostname, _up(BASE).port
 s = socket.create_connection((_h, _p), timeout=3)
-s.sendall(b"GET /api/events HTTP/1.1\r\nHost: x\r\nAccept: text/event-stream\r\n\r\n")
+_sse = "GET /api/events HTTP/1.1\r\nHost: x\r\nAccept: text/event-stream\r\n"
+if TOKEN:
+    _sse += f"Authorization: Bearer {TOKEN}\r\n"
+s.sendall((_sse + "\r\n").encode())
 data = s.recv(200).decode(errors="replace")
 assert "event:" in data or "200" in data, data[:100]
 print("sse OK")
@@ -72,8 +106,11 @@ print("health OK")
 
 # malformed JSON body must 400, not create an empty block with 200
 import urllib.error
+_hdrs = {"Content-Type": "application/json"}
+if TOKEN:
+    _hdrs["Authorization"] = f"Bearer {TOKEN}"
 req = urllib.request.Request(BASE + f"/api/blocks?board={bq}", data=b"not json",
-    headers={"Content-Type": "application/json"}, method="POST")
+    headers=_hdrs, method="POST")
 try:
     with urllib.request.urlopen(req) as r:
         code = r.status
@@ -88,8 +125,11 @@ def call_expect(code, method, path, obj=None):
     """Call and assert the exact status code (a smoke test that can't fail
     on its error cases proves nothing)."""
     data = json.dumps(obj).encode() if obj is not None else None
+    headers = {"Content-Type": "application/json"} if data else {}
+    if TOKEN:
+        headers["Authorization"] = f"Bearer {TOKEN}"
     req = urllib.request.Request(BASE + path, data=data,
-        headers={"Content-Type": "application/json"} if data else {}, method=method)
+        headers=headers, method=method)
     try:
         with urllib.request.urlopen(req) as r:
             st = r.status

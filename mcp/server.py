@@ -27,9 +27,25 @@ import uuid
 BASE = os.environ.get("VISOR_URL", "http://127.0.0.1:8900").rstrip("/")
 HOME = os.environ.get("VISOR_HOME") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MEDIA_DIR = os.path.join(HOME, "data", "media")
-TOKEN = os.environ.get("VISOR_TOKEN", "").strip()
+
+
+def _resolve_token():
+    """v1.9: servers always carry a token — explicit VISOR_TOKEN env wins,
+    else the server's generated <data>/visor-token (0600)."""
+    t = os.environ.get("VISOR_TOKEN", "").strip()
+    if t:
+        return t
+    d = os.environ.get("VISOR_DATA") or os.path.join(HOME, "data")
+    try:
+        with open(os.path.join(d, "visor-token")) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+TOKEN = _resolve_token()
 AUTO_START = os.environ.get("VISOR_AUTO_START", "1") != "0"
-SERVER_INFO = {"name": "visor", "version": "1.7.0"}
+SERVER_INFO = {"name": "visor", "version": "1.9.0"}
 PROTOCOL_FALLBACK = "2025-06-18"
 
 BLOCK_TYPES = ["section", "text", "todo", "table", "stat", "chart", "code",
@@ -171,9 +187,22 @@ def valid_types():
     return list(BLOCK_TYPES) + _module_types()
 
 
+_MEDIA_SUFFIXES = {
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".avif",
+    ".mp4", ".webm", ".mov", ".m4v", ".mp3", ".wav", ".ogg", ".m4a",
+    ".flac", ".opus",
+}
+
+
 def stage(src):
+    """Local file -> copy into the media dir (served at /media/<name>).
+    v1.9: only files that plausibly ARE media get staged — image/audio/
+    video suffix, regular file, no dotfile path component (blocks ~/.ssh,
+    ~/.hermes, .env, ...). Anything else passes through untouched."""
     src = os.path.expanduser(src)
-    if os.path.exists(src):
+    if (os.path.isfile(src)
+            and os.path.splitext(src)[1].lower() in _MEDIA_SUFFIXES
+            and not any(p.startswith(".") for p in src.split(os.sep) if p)):
         os.makedirs(MEDIA_DIR, exist_ok=True)
         name = uuid.uuid4().hex[:8] + os.path.splitext(src)[1]
         shutil.copyfile(src, os.path.join(MEDIA_DIR, name))

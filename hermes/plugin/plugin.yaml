@@ -1,7 +1,17 @@
 name: visor
-version: 1.8.0
-description: "Visor — push live visual blocks (todos, findings, tables, stats, charts, audio/video) to an infinite-canvas holographic webpage that updates in place via SSE. Turnkey: ships its own server (bare python, Docker opt-in) — no separate install."
+version: 1.9.0
+description: "Visor — push live visual blocks (todos, findings, tables, stats, charts, audio/video) to an infinite-canvas holographic webpage that updates in place via SSE. Turnkey: ships its own server (bare python, Docker opt-in) — no separate install. Loopback bind + per-install token by default (v1.9)."
 author: "samundra"
 requires_hermes: ">=0.21.5"
 provides_tools:
   - visor_push
+# All optional — every one has a working default (v1.9: the token is
+# generated per install and stored 0600 in the data dir; the chat bridge
+# degrades to a "not configured" hint). Declared so profile-scoped secret
+# resolution (agent.secret_scope) and the secret source UIs can surface them.
+requires_env:
+  - VISOR_TOKEN
+  - VISOR_HOST
+  - VISOR_CHAT_URL
+  - VISOR_CHAT_SECRET
+  - VISOR_CHAT_REPLY

@@ -47,9 +47,56 @@ ROOT = Path(_LEGACY_HOME) if _LEGACY_HOME else BUNDLE_SERVER
 PORT = int(os.environ.get("VISOR_PORT", "8900"))
 BASE = f"http://127.0.0.1:{PORT}"
 _PUBLIC = f"http://localhost:{PORT}"
-# Match the server's VISOR_TOKEN (if set) so the plugin works against an
-# authenticated visor.
-TOKEN = os.environ.get("VISOR_TOKEN", "").strip()
+# v1.9: profile-scoped secret resolution. In multiplexed (multi-profile)
+# deployments os.environ can hold ANOTHER profile's value, so secrets are
+# read through Hermes' secret scope (profile .env overlay) with an os.environ
+# fallback. Single-profile setups (TUI, gateway) resolve to the process env.
+_SECRET_NAMES = ("VISOR_TOKEN", "VISOR_CHAT_URL", "VISOR_CHAT_SECRET",
+                 "VISOR_CHAT_REPLY")
+_token_cache: Optional[str] = None
+
+
+def _secret(name: str) -> str:
+    """Resolve a declared secret (see plugin.yaml `requires_env`):
+    profile-scoped secret store first, process env as fallback."""
+    val = None
+    try:
+        from agent.secret_scope import get_secret
+        val = get_secret(name)
+    except Exception:
+        val = None  # scope not installed (plain CLI/dev run) — env fallback
+    if isinstance(val, str) and val.strip():
+        return val.strip()
+    return os.environ.get(name, "").strip()
+
+
+def _token() -> str:
+    """The API token to send to the server. Priority: explicit VISOR_TOKEN
+    (secret scope / env) -> the server's generated per-install token file
+    (v1.9: servers now always carry one)."""
+    global _token_cache
+    t = _secret("VISOR_TOKEN")
+    if t:
+        return t
+    if _token_cache is not None:
+        return _token_cache
+    # Candidates: the bare-start data dir, and the compose-mounted data dir
+    # (docker mode: the server generates its token inside the volume).
+    candidates = [DATA_DIR / "visor-token"]
+    if BUNDLED:
+        docker_data = Path(os.environ.get("VISOR_DATA_HOST")
+                          or os.path.join(str(ROOT), "data"))
+        candidates.append(docker_data / "visor-token")
+    for p in candidates:
+        try:
+            tok = p.read_text().strip()
+            if tok:
+                _token_cache = tok
+                return tok
+        except (OSError, FileNotFoundError):
+            continue
+    _token_cache = ""
+    return ""
 if BUNDLED:
     DATA_DIR = Path(os.environ.get("VISOR_DATA")
                     or (Path.home() / ".local" / "share" / "visor"))
@@ -169,8 +216,9 @@ def _http(method: str, path: str, payload: Optional[Dict[str, Any]] = None,
           timeout: float = 10.0) -> Dict[str, Any]:
     data = json.dumps(payload or {}).encode()
     headers = {"Content-Type": "application/json"}
-    if TOKEN:
-        headers["Authorization"] = f"Bearer {TOKEN}"
+    tok = _token()  # v1.9: servers always carry a token (generated or set)
+    if tok:
+        headers["Authorization"] = f"Bearer {tok}"
     req = urllib.request.Request(
         BASE + path, data=data if method in ("POST", "PATCH") else None,
         headers=headers, method=method,
@@ -236,6 +284,14 @@ def _bare_start() -> None:
         # Legacy leaves VISOR_DATA alone — the server's own ROOT/data default
         # is the repo's data dir (pre-v1.8 behaviour).
         env["VISOR_DATA"] = str(DATA_DIR)
+    # v1.9: pass declared secrets explicitly (profile-scoped resolution) so
+    # the server child sees THIS profile's values, not another profile's
+    # process env in a multiplexed deployment.
+    for name in ("VISOR_TOKEN", "VISOR_CHAT_URL", "VISOR_CHAT_SECRET",
+                 "VISOR_CHAT_REPLY"):
+        val = _secret(name)
+        if val:
+            env[name] = val
     subprocess.Popen(
         [sys.executable, str(SERVER)], cwd=str(ROOT),
         env=env, stdout=log, stderr=log, start_new_session=True,
@@ -244,8 +300,16 @@ def _bare_start() -> None:
 
 def _docker_compose_up() -> None:
     """Start/recreate the container from the compose file in ROOT."""
+    # v1.9: compose interpolates ${VISOR_TOKEN} & co. from the environment —
+    # hand it the profile-scoped values so the container matches this profile.
+    env = dict(os.environ)
+    for name in ("VISOR_TOKEN", "VISOR_CHAT_URL", "VISOR_CHAT_SECRET",
+                 "VISOR_CHAT_REPLY"):
+        val = _secret(name)
+        if val:
+            env[name] = val
     r = subprocess.run(["docker", "compose", "up", "-d"], cwd=str(ROOT),
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=300, env=env)
     if r.returncode != 0:
         raise RuntimeError(f"docker compose up failed: {r.stderr.strip() or r.stdout.strip()}")
 
@@ -289,14 +353,35 @@ def _check_available() -> bool:
     return SERVER.exists()
 
 
+_MEDIA_SUFFIXES = {
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".avif",
+    ".mp4", ".webm", ".mov", ".m4v", ".mp3", ".wav", ".ogg", ".m4a",
+    ".flac", ".opus",
+}
+
+
 def _stage_image(path: str) -> str:
+    """Stage a local media file into the server's media dir (served at
+    /media/<name>). The model supplies the path, so v1.9 accepts only
+    files that plausibly ARE media: image/audio/video suffix (checked on
+    the path as given AND after symlink resolution), regular files only,
+    and no dotfile path component — that rules out ~/.ssh/id_rsa, the
+    Hermes home (~/.hermes/.env), and any dotfile a model might be prodded
+    into naming. Anything else passes through untouched (URL, /media/ path,
+    or a file the card will just display as-is)."""
     src = Path(path).expanduser()
-    if src.exists():
-        MEDIA.mkdir(exist_ok=True)
-        name = uuid.uuid4().hex[:8] + src.suffix
-        shutil.copyfile(src, MEDIA / name)
-        return f"/media/{name}"
-    return path  # already a URL or /media path — pass through
+    if src.is_file() and src.suffix.lower() in _MEDIA_SUFFIXES:
+        try:
+            resolved = src.resolve()
+        except (OSError, RuntimeError):
+            resolved = src
+        if (resolved.suffix.lower() in _MEDIA_SUFFIXES
+                and not any(p.startswith(".") for p in src.parts)):
+            MEDIA.mkdir(exist_ok=True)
+            name = uuid.uuid4().hex[:8] + src.suffix
+            shutil.copyfile(src, MEDIA / name)
+            return f"/media/{name}"
+    return path  # URL, /media/ path, or a file we refuse to stage
 
 
 def _handle_visor_push(args: Dict[str, Any], **_kw: Any) -> str:

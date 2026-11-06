@@ -22,9 +22,10 @@ services:
     environment:
       - VISOR_DATA=/data
       - VISOR_PORT=8900
-      # Optional bearer auth: set VISOR_TOKEN to gate /api/* and /media/*.
-      # Leave unset for localhost/LAN open mode. The web UI reads it from
-      # ?token=*** in the URL (EventSource can't set headers).
+      # v1.9: the server now always carries a token — generated per install
+      # and stored 0600 at /data/visor-token (on the host side of the volume
+      # mount) unless you set VISOR_TOKEN explicitly. The web UI gets its
+      # token injected by the server; CLI/MCP/plugin read the file.
       - VISOR_TOKEN=${VISOR_TOKEN:-}
       # Optional modules (v1.5): comma list from plugins/, e.g. "chat,voice".
       # Empty = core only. Unknown names are logged and skipped at boot.

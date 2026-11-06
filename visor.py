@@ -47,9 +47,23 @@ import urllib.request
 
 PORT = int(os.environ.get("VISOR_PORT", os.environ.get("HOLO_PORT", "8900")))
 BASE = f"http://127.0.0.1:{PORT}"
-# Match the server's VISOR_TOKEN (if set) so the CLI works against an
-# authenticated visor.
-TOKEN = os.environ.get("VISOR_TOKEN", "").strip()
+# v1.9: visor servers always carry a token (generated per install if
+# VISOR_TOKEN is unset), so the CLI resolves it: explicit VISOR_TOKEN env
+# wins, else the server's generated <data>/visor-token file (0600).
+def _resolve_token():
+    t = os.environ.get("VISOR_TOKEN", "").strip()
+    if t:
+        return t
+    d = os.environ.get("VISOR_DATA") or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "data")
+    try:
+        with open(os.path.join(d, "visor-token")) as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+TOKEN = _resolve_token()
 
 
 def request(method, path, payload=None):
